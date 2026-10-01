@@ -39,13 +39,15 @@ class RidePreferences(BaseModel):
         "e.g. 'Gentle, low-traffic ride for you and your kid.'"
     )
     avoid_hills: float = Field(
-        description="0.0 = doesn't care about hills, 1.0 = avoid hills as much as possible"
+        description="-1.0 = WANTS hills (training/workout), 0.0 = doesn't care, "
+        "1.0 = avoid hills as much as possible"
     )
     avoid_busy_roads: float = Field(
         description="0.0 = fine riding with fast traffic, 1.0 = stay away from busy roads"
     )
     prefer_bike_lanes: float = Field(
-        description="0.0 = doesn't care, 1.0 = strongly wants bike lanes and bike paths"
+        description="-1.0 = AVOID bike lanes and bike paths (ride on regular roads), "
+        "0.0 = doesn't care, 1.0 = strongly wants bike lanes and bike paths"
     )
     speed_importance: float = Field(
         description="0.0 = happy to take longer, 1.0 = wants the quickest route"
@@ -76,7 +78,7 @@ DEFAULT_PREFERENCES = RidePreferences(
     understood="A normal, balanced bike ride.",
     avoid_hills=0.5,
     avoid_busy_roads=0.5,
-    prefer_bike_lanes=0.5,
+    prefer_bike_lanes=0.3,
     speed_importance=0.5,
     avoid_unpaved=0.3,
     bicycle_type="Hybrid",
@@ -89,12 +91,15 @@ INSTRUCTIONS_FOR_AI = """You turn a cyclist's request into route settings for a 
 routing engine in California. Fill in every field.
 
 Guidelines:
-- Start from a balanced rider (0.5 for each preference, Hybrid bike, 10 mph) and only
-  move a value when the request gives a reason to.
+- Start from a balanced rider (avoid_hills 0.5, avoid_busy_roads 0.5, prefer_bike_lanes 0.3,
+  speed_importance 0.5, Hybrid bike, 10 mph) and only move a value when the request gives
+  a reason to.
+- Some values can go NEGATIVE, meaning the rider wants the opposite:
+  "avoid bike lanes", "no bike paths", "just regular roads" -> prefer_bike_lanes -0.7 to -1.0.
+  "I want hills", "hilly workout", "training climbs" -> avoid_hills -0.5 to -1.0.
 - Riding with kids, beginners, nervous riders, or "safest route" -> raise avoid_busy_roads
   and prefer_bike_lanes, lower speed_mph.
 - Heavy loads, cargo bikes, tired legs, injuries, older riders -> raise avoid_hills.
-- "Training", "workout", "I want hills" -> lower avoid_hills (toward 0).
 - "Fastest", "in a hurry", "late" -> raise speed_importance.
 - Skinny tires / road bike -> Road and raise avoid_unpaved. Gravel or trails -> Cross or Mountain.
 - stop_type: only set it if the rider asks to stop somewhere ("grab coffee" -> coffee,
@@ -154,9 +159,10 @@ async def parse_instructions(text, previous=None):
         raise AIUnavailable("The AI is busy right now. Please try again in a moment.")
 
     # Double-check the AI's numbers are in range. Never fully trust AI output!
-    for field in ["avoid_hills", "avoid_busy_roads", "prefer_bike_lanes",
-                  "speed_importance", "avoid_unpaved"]:
+    for field in ["avoid_busy_roads", "speed_importance", "avoid_unpaved"]:
         setattr(prefs, field, clamp(getattr(prefs, field)))
+    for field in ["avoid_hills", "prefer_bike_lanes"]:  # these two can be negative
+        setattr(prefs, field, clamp(getattr(prefs, field), -1.0, 1.0))
     prefs.speed_mph = clamp(prefs.speed_mph, 4, 25)
     return prefs
 
@@ -165,11 +171,22 @@ def to_valhalla_settings(prefs):
     """
     Convert our preferences into Valhalla's bicycle settings.
     Valhalla's scale is backwards from ours: use_hills 0.0 means AVOID hills.
+
+    Valhalla's "use_roads" is one dial for two of our preferences:
+    low = stick to bike paths/lanes (and away from traffic), high = regular roads are fine.
     """
+    use_roads = 1 - prefs.avoid_busy_roads
+    if prefs.prefer_bike_lanes < 0:
+        # Rider wants to AVOID bike lanes: turn the dial toward regular roads.
+        use_roads = max(use_roads, 0.5 + 0.5 * -prefs.prefer_bike_lanes)
+    elif prefs.prefer_bike_lanes > 0:
+        # Rider wants bike lanes: turn the dial toward bike paths.
+        use_roads = min(use_roads, 0.5 - 0.5 * prefs.prefer_bike_lanes)
+
     return {
         "bicycle_type": prefs.bicycle_type,
         "cycling_speed": round(prefs.speed_mph * 1.609, 1),  # Valhalla wants km/h
-        "use_hills": round(1 - prefs.avoid_hills, 2),
-        "use_roads": round(1 - prefs.avoid_busy_roads, 2),
+        "use_hills": round(clamp(1 - prefs.avoid_hills), 2),  # wanting hills (negative) -> 1.0
+        "use_roads": round(use_roads, 2),
         "avoid_bad_surfaces": round(prefs.avoid_unpaved, 2),
     }

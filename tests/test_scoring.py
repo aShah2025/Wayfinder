@@ -6,7 +6,8 @@ Each test_ function checks one thing. If any check is wrong, pytest shows exactl
 """
 from backend.ai_parser import DEFAULT_PREFERENCES, clamp, to_valhalla_settings
 from backend.routing import decode_polyline
-from backend.scoring import explain_choice, is_avoided_street, measure_route, score_route
+from backend.scoring import (explain_choice, find_unmet_requests, is_avoided_street,
+                             measure_route, score_route)
 
 
 # ---------- helpers to build fake data ----------
@@ -49,10 +50,25 @@ def test_clamp_keeps_ai_numbers_in_range():
 
 def test_valhalla_settings_flip_the_scale():
     # Our "avoid_hills 0.9" means Valhalla's "use_hills 0.1".
-    settings = to_valhalla_settings(prefs_with(avoid_hills=0.9, avoid_busy_roads=0.2, speed_mph=10))
+    settings = to_valhalla_settings(
+        prefs_with(avoid_hills=0.9, avoid_busy_roads=0.2, prefer_bike_lanes=0.0, speed_mph=10))
     assert settings["use_hills"] == 0.1
     assert settings["use_roads"] == 0.8
     assert settings["cycling_speed"] == 16.1  # 10 mph in km/h
+
+
+def test_avoiding_bike_lanes_turns_valhalla_toward_roads():
+    settings = to_valhalla_settings(prefs_with(prefer_bike_lanes=-1.0, avoid_busy_roads=0.5))
+    assert settings["use_roads"] == 1.0
+
+
+def test_wanting_bike_lanes_turns_valhalla_toward_paths():
+    settings = to_valhalla_settings(prefs_with(prefer_bike_lanes=1.0, avoid_busy_roads=0.2))
+    assert settings["use_roads"] == 0.0
+
+
+def test_wanting_hills_never_goes_past_valhallas_max():
+    assert to_valhalla_settings(prefs_with(avoid_hills=-1.0))["use_hills"] == 1.0
 
 
 # ---------- scoring.py: measuring ----------
@@ -136,4 +152,46 @@ def test_explanation_uses_real_numbers():
     reasons = explain_choice(best, standard, prefs)
     assert "200 ft less climbing" in reasons
     assert "1.5 fewer miles on busy roads" in reasons
-    assert "costs 3 extra min compared to the standard route" in reasons
+    assert "Tradeoff: 3 extra min compared to the standard route" in reasons
+
+
+# ---------- avoiding bike lanes (the bug a user found) ----------
+
+def test_bike_lane_avoider_prefers_route_with_fewer_bike_lanes():
+    prefs = prefs_with(prefer_bike_lanes=-1.0)
+    lots_of_lanes = fake_route(30, bike=3.4)
+    few_lanes = fake_route(30, bike=1.6)
+    assert (score_route(few_lanes, few_lanes["metrics"], prefs)
+            < score_route(lots_of_lanes, lots_of_lanes["metrics"], prefs))
+
+
+def test_explanation_never_praises_bike_lanes_to_someone_avoiding_them():
+    prefs = prefs_with(prefer_bike_lanes=-1.0)
+    standard = fake_route(30, bike=1.0, geometry=[[0, 0]])
+    best = fake_route(30, bike=2.0, geometry=[[1, 1]])
+    reasons = " ".join(explain_choice(best, standard, prefs))
+    assert "more miles on bike lanes" not in reasons
+
+
+def test_explanation_credits_fewer_bike_lanes_when_asked():
+    prefs = prefs_with(prefer_bike_lanes=-1.0)
+    standard = fake_route(30, bike=3.43, busy=2.85)
+    best = fake_route(31, bike=1.6, busy=3.42)
+    reasons = explain_choice(best, standard, prefs)
+    assert "1.83 fewer miles on bike lanes, as you asked" in reasons
+    assert "Tradeoff: 0.57 more miles on busy roads" in reasons
+
+
+def test_warns_when_bike_lanes_could_not_be_avoided():
+    prefs = prefs_with(prefer_bike_lanes=-1.0)
+    best = fake_route(25)
+    best["metrics"]["bike_lane_percent"] = 45
+    warnings = find_unmet_requests(best, prefs)
+    assert any("Couldn't fully avoid bike lanes: 45%" in w for w in warnings)
+
+
+def test_no_warnings_when_request_was_met():
+    prefs = prefs_with(prefer_bike_lanes=-1.0)
+    best = fake_route(25)
+    best["metrics"]["bike_lane_percent"] = 5
+    assert find_unmet_requests(best, prefs) == []

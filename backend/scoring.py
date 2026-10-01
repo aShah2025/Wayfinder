@@ -117,7 +117,9 @@ def shrink(points, max_points):
 def score_route(route, metrics, prefs):
     """
     One number for how well a route fits this rider. LOWER is better.
-    Each preference (0 to 1, set by the AI) controls how much a dislike "costs".
+    Each preference (set by the AI) controls how much a dislike "costs".
+    Hills and bike lanes can be negative, which flips a penalty into a bonus
+    (someone training WANTS climbing; someone avoiding bike lanes is penalized for them).
     """
     score = route["duration_minutes"] * (0.5 + prefs.speed_importance)
 
@@ -129,7 +131,8 @@ def score_route(route, metrics, prefs):
     # Busy roads: up to 15 penalty minutes per mile.
     score += prefs.avoid_busy_roads * metrics["busy_road_miles"] * 15
 
-    # Bike lanes and paths are a bonus: up to 5 minutes off per mile.
+    # Bike lanes and paths: up to 5 minutes off per mile if you like them,
+    # up to 5 minutes added per mile if you want to avoid them.
     score -= prefs.prefer_bike_lanes * metrics["bike_lane_miles"] * 5
 
     # Using a street the rider told us to avoid is basically disqualifying.
@@ -143,36 +146,79 @@ def explain_choice(best, standard, prefs):
     """
     Explain the chosen route by comparing it with the standard route
     (what an ordinary map app would give). Built only from measured numbers.
+    Lists the good parts (what the rider asked for) AND the costs (tradeoffs).
     """
     if best is standard or best["geometry"] == standard["geometry"]:
-        return ["The standard bike route already fits what you asked for."]
+        return ["None of the alternatives fit your request better than the standard route."]
 
     b, s = best["metrics"], standard["metrics"]
     reasons = []
+    tradeoffs = []
 
-    climb_saved = s["climb_ft"] - b["climb_ft"]
-    if prefs.avoid_hills >= 0.5 and climb_saved >= 10:
-        reasons.append(f"{climb_saved} ft less climbing")
-    if prefs.avoid_hills <= 0.2 and -climb_saved >= 10:
-        reasons.append(f"{-climb_saved} ft more climbing for your workout")
-    if b["steepest_grade"] < s["steepest_grade"] and prefs.avoid_hills >= 0.5:
+    # Hills
+    climb_change = b["climb_ft"] - s["climb_ft"]
+    if prefs.avoid_hills > 0 and climb_change <= -10:
+        reasons.append(f"{-climb_change} ft less climbing")
+    if prefs.avoid_hills < 0 and climb_change >= 10:
+        reasons.append(f"{climb_change} ft more climbing for your workout")
+    if prefs.avoid_hills > 0 and climb_change >= 10:
+        tradeoffs.append(f"{climb_change} ft more climbing")
+    if prefs.avoid_hills >= 0.5 and b["steepest_grade"] < s["steepest_grade"]:
         reasons.append(f"steepest hill is {b['steepest_grade']}% instead of {s['steepest_grade']}%")
 
-    busy_saved = round(s["busy_road_miles"] - b["busy_road_miles"], 2)
-    if busy_saved >= 0.1:
-        reasons.append(f"{busy_saved} fewer miles on busy roads")
+    # Busy roads (always worth mentioning: fewer is good, more is a tradeoff)
+    busy_change = round(b["busy_road_miles"] - s["busy_road_miles"], 2)
+    if busy_change <= -0.1:
+        reasons.append(f"{-busy_change} fewer miles on busy roads")
+    elif busy_change >= 0.1:
+        tradeoffs.append(f"{busy_change} more miles on busy roads")
 
-    lanes_gained = round(b["bike_lane_miles"] - s["bike_lane_miles"], 2)
-    if lanes_gained >= 0.1:
-        reasons.append(f"{lanes_gained} more miles on bike lanes and paths")
+    # Bike lanes: only call a change "good" if it's the direction the rider wanted
+    lane_change = round(b["bike_lane_miles"] - s["bike_lane_miles"], 2)
+    if prefs.prefer_bike_lanes > 0 and lane_change >= 0.1:
+        reasons.append(f"{lane_change} more miles on bike lanes and paths")
+    if prefs.prefer_bike_lanes < 0 and lane_change <= -0.1:
+        reasons.append(f"{-lane_change} fewer miles on bike lanes, as you asked")
+    if prefs.prefer_bike_lanes > 0 and lane_change <= -0.1:
+        tradeoffs.append(f"{-lane_change} fewer miles on bike lanes")
 
     if s["uses_avoided_street"] and not b["uses_avoided_street"]:
         reasons.append("stays off " + ", ".join(prefs.avoid_streets))
 
-    extra_minutes = best["duration_minutes"] - standard["duration_minutes"]
-    if extra_minutes > 0:
-        reasons.append(f"costs {extra_minutes} extra min compared to the standard route")
-    elif extra_minutes < 0:
-        reasons.append(f"{-extra_minutes} min faster than the standard route")
+    # Time
+    minute_change = best["duration_minutes"] - standard["duration_minutes"]
+    if minute_change < 0:
+        reasons.append(f"{-minute_change} min faster than the standard route")
+    elif minute_change > 0:
+        tradeoffs.append(f"{minute_change} extra min compared to the standard route")
 
-    return reasons or ["Slightly better fit for your preferences than the standard route."]
+    if not reasons:
+        reasons.append("Slightly better overall fit for your preferences than the standard route")
+    return reasons + ["Tradeoff: " + t for t in tradeoffs]
+
+
+def find_unmet_requests(best, prefs):
+    """
+    Be honest when the chosen route still doesn't do what the rider asked,
+    because sometimes no route can (e.g. the only way there is a bike path).
+    Returns a list of warnings shown as "Heads up" in the app.
+    """
+    m = best["metrics"]
+    warnings = []
+
+    if prefs.prefer_bike_lanes <= -0.3 and m["bike_lane_percent"] >= 20:
+        warnings.append(f"Couldn't fully avoid bike lanes: {m['bike_lane_percent']}% of this "
+                        "route still uses them. This was the lowest of the options found.")
+    if prefs.prefer_bike_lanes >= 0.7 and m["bike_lane_percent"] < 30:
+        warnings.append(f"Only {m['bike_lane_percent']}% of this route has bike lanes or paths. "
+                        "There aren't many in this area.")
+    if prefs.avoid_hills >= 0.7 and m["steepest_grade"] >= 8:
+        warnings.append(f"This route still has a {m['steepest_grade']}% hill. "
+                        "None of the options avoided it.")
+    if prefs.avoid_busy_roads >= 0.7 and m["busy_road_miles"] >= 1:
+        warnings.append(f"This route still has {m['busy_road_miles']} miles on busy roads. "
+                        "It was the calmest option found.")
+    if m["uses_avoided_street"]:
+        warnings.append("Couldn't find a route that completely avoids "
+                        + ", ".join(prefs.avoid_streets) + ".")
+    return warnings

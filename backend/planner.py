@@ -12,7 +12,7 @@ import asyncio
 
 from backend.ai_parser import parse_instructions, to_valhalla_settings
 from backend.routing import DEFAULT_SETTINGS, RouteError, get_bike_route, get_road_details
-from backend.scoring import explain_choice, measure_route, score_route
+from backend.scoring import explain_choice, find_unmet_requests, measure_route, score_route
 from backend.stops import find_stop
 
 MAX_REROUTES = 3        # how many times we try to steer around an avoided street
@@ -107,6 +107,7 @@ async def plan_ride(start, end, instructions, previous_prefs=None):
     best = min(unique, key=lambda r: r["score"])
     standard = next((r for r in candidates if r["name"] == "Standard"), best)
     explanation = explain_choice(best, standard, prefs)
+    warnings = find_unmet_requests(best, prefs)  # be honest about what we couldn't do
     if stop:
         explanation.insert(0, f"{stop['emoji']} stops at {stop['name']} on the way")
     elif prefs.stop_type != "none":
@@ -124,6 +125,7 @@ async def plan_ride(start, end, instructions, previous_prefs=None):
         "understood": prefs.understood,
         "preferences": prefs.model_dump(),
         "explanation": explanation,
+        "warnings": warnings,
         "routes": routes,
         "stop": stop,
     }

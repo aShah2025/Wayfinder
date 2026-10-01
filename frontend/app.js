@@ -214,11 +214,23 @@ document.getElementById("go").addEventListener("click", findRoute);
 
 // ============ 4. SHOWING THE RESULTS ============
 
-// Turn a 0-1 preference into a word for the little tags.
+// Turn a preference number into a word for the little tags.
+// Hills and bike lanes can be negative, meaning the rider wants the opposite.
 function level(value) {
   if (value >= 0.7) return "high";
+  if (value <= -0.3) return "opposite";
   if (value <= 0.3) return "low";
   return "medium";
+}
+
+function hillsTag(value) {
+  if (value <= -0.3) return "Hills: bring them on";
+  return "Avoid hills: " + level(value);
+}
+
+function bikeLanesTag(value) {
+  if (value <= -0.3) return "Bike lanes: avoid";
+  return "Bike lanes: " + level(value);
 }
 
 // Make a small HTML element with a class and text (safer than building HTML strings).
@@ -240,9 +252,9 @@ function showResults(data) {
   const p = data.preferences;
   const tags = makeElement("div", "tags");
   const tagTexts = [
-    "Avoid hills: " + level(p.avoid_hills),
+    hillsTag(p.avoid_hills),
     "Avoid traffic: " + level(p.avoid_busy_roads),
-    "Bike lanes: " + level(p.prefer_bike_lanes),
+    bikeLanesTag(p.prefer_bike_lanes),
     "Speed matters: " + level(p.speed_importance),
     p.bicycle_type + " bike · " + p.speed_mph + " mph",
   ];
@@ -256,9 +268,22 @@ function showResults(data) {
   const why = makeElement("div", "why");
   why.appendChild(makeElement("strong", "", "Why this route"));
   const reasons = makeElement("ul");
-  for (const reason of data.explanation) reasons.appendChild(makeElement("li", "", reason));
+  for (const reason of data.explanation) {
+    const isTradeoff = reason.startsWith("Tradeoff: ");
+    reasons.appendChild(makeElement("li", isTradeoff ? "tradeoff" : "", reason));
+  }
   why.appendChild(reasons);
   results.appendChild(why);
+
+  // --- Honest warnings when the route couldn't do everything asked ---
+  if (data.warnings && data.warnings.length > 0) {
+    const headsUp = makeElement("div", "heads-up");
+    headsUp.appendChild(makeElement("strong", "", "⚠️ Heads up"));
+    const list = makeElement("ul");
+    for (const warning of data.warnings) list.appendChild(makeElement("li", "", warning));
+    headsUp.appendChild(list);
+    results.appendChild(headsUp);
+  }
 
   // --- One card per route option ---
   data.routes.forEach((route, index) => {

@@ -38,6 +38,7 @@ The AI (Google Gemini) does exactly **one** job: turning your words into a stric
 - 🔁 **Follow-ups**: "ok but I'm late now" adjusts your ride instead of starting over
 - ⚖️ **Side-by-side route options** with climb, busy-road miles, and bike-lane %
 - 🚫 **Avoid any street by name**, with automatic re-routing
+- ⚠️ **Honest "heads up" warnings** when no route can fully do what you asked
 - ☕ **Stops on the way** (coffee, water, restrooms, bike shops...), picked for the smallest detour
 - ⛰️ **Elevation chart** for every route
 - 📍 **Use my location**, works on phones
@@ -59,7 +60,8 @@ Open **http://localhost:8000**.
 Run the tests:
 
 ```bash
-pytest
+pytest                      # 24 fast tests of Wayfinder's own logic
+python tests/check_ai.py    # 18 checks that the AI maps requests to the right settings
 ```
 
 ## Built with

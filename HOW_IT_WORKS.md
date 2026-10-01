@@ -59,7 +59,8 @@ Typical time: 3–8 seconds.
 - `load_dotenv()` reads the secret API key from `.env`, so the key is never written in the code.
 
 ### `backend/ai_parser.py`: the ONLY AI step
-- `RidePreferences` is the **form** the AI must fill in: `avoid_hills` (0–1), `avoid_busy_roads`, `prefer_bike_lanes`, `speed_importance`, `avoid_unpaved`, `bicycle_type`, `speed_mph`, `avoid_streets`, `stop_type`, plus `understood` (a one-sentence summary shown to the rider).
+- `RidePreferences` is the **form** the AI must fill in: `avoid_hills`, `avoid_busy_roads`, `prefer_bike_lanes`, `speed_importance`, `avoid_unpaved`, `bicycle_type`, `speed_mph`, `avoid_streets`, `stop_type`, plus `understood` (a one-sentence summary shown to the rider).
+- Most preferences go from 0 to 1, but **hills and bike lanes go from −1 to +1**, because riders can want the *opposite*: "I want a hilly workout" → `avoid_hills: -1`, "avoid bike lanes" → `prefer_bike_lanes: -1`. (This was a real bug a tester found: "avoid bike lanes" used to just mean "don't care.")
 - **Structured output:** we give Gemini the form as a `response_schema`, so it *has* to answer in exactly that shape. It can't ramble or invent a route.
 - **Never trust AI output blindly:** `clamp()` forces every number back into a safe range.
 - **Follow-ups:** the previous preferences are sent along, and the AI is told to change only what the new message asks for.
@@ -98,12 +99,14 @@ score = riding time × (0.5 + speed_importance)
       + avoid_hills       × climb_ft / 8               (every 8 ft of climbing ≈ 1 minute)
       + avoid_hills       × (steepest% − 5) × 4         (extra pain for steep pieces over 5%)
       + avoid_busy_roads  × busy miles × 15            (up to 15 min per busy mile)
-      − prefer_bike_lanes × bike-lane miles × 5        (bike lanes are a bonus)
+      − prefer_bike_lanes × bike-lane miles × 5        (bonus if you like them, penalty if negative)
       + 1000 if it uses a street you banned           (basically disqualified)
 ```
 In one sentence: *"Each route's score is its real time plus imaginary extra minutes for the things you dislike, and the AI's preferences decide how much each dislike costs."*
 
-**Explaining** (`explain_choice`) compares the winner with the Standard route and writes reasons **only from measured numbers**, like "1.55 fewer miles on busy roads." The AI never writes the explanation, so it can't make anything up.
+**Explaining** (`explain_choice`) compares the winner with the Standard route and writes reasons **only from measured numbers**, like "1.55 fewer miles on busy roads." It only praises changes in the direction the rider asked for, and it lists the costs too ("Tradeoff: 0.57 more miles on busy roads"). The AI never writes the explanation, so it can't make anything up.
+
+**Being honest** (`find_unmet_requests`): sometimes *no* route can do what you asked, for example if the only way there is a bike path. Instead of pretending, the app shows a **⚠️ Heads up**, like "Couldn't fully avoid bike lanes: 33% of this route still uses them."
 
 ### `backend/stops.py`: a stop on the way
 - The AI picks the stop **type** (coffee, water, restroom, bike shop, food, park, grocery).
@@ -125,8 +128,8 @@ In one sentence: *"Each route's score is its real time plus imaginary extra minu
 - `lastPreferences` is kept so the next message becomes a **follow-up**.
 
 ### `tests/`: automated tests
-- 16 tests check decoding, measuring, scoring, explanations, and stop picking with fake data. They need no internet or AI.
-- Run them with `pytest`.
+- 24 tests check decoding, measuring, scoring, explanations, warnings, and stop picking with fake data. They need no internet or AI. Run them with `pytest`.
+- `tests/check_ai.py` is different: it sends 18 real requests to Gemini and checks each setting goes the right way (e.g. "avoid bike lanes" must be negative). Run it with `python tests/check_ai.py` after changing the AI instructions.
 
 ---
 

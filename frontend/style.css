@@ -195,6 +195,24 @@ input:focus, textarea:focus {
   padding-left: 18px;
 }
 
+.why .tradeoff {
+  color: #5f6368;
+}
+
+/* Honest warnings */
+.heads-up {
+  font-size: 14px;
+  background: #fef7e0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #8a5300;
+}
+
+.heads-up ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
 /* Route option cards */
 .route-card {
   border: 2px solid #dadce0;
