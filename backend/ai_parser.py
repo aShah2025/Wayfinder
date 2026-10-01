@@ -65,6 +65,11 @@ class RidePreferences(BaseModel):
         description="Exact names of streets the rider wants to avoid, written out in full, "
         "e.g. ['Capitol Expressway', 'Monterey Road']. Empty list if none."
     )
+    stop_type: Literal[
+        "none", "coffee", "food", "water", "restroom", "bike_shop", "park", "grocery"
+    ] = Field(
+        description="A kind of place the rider wants to stop at on the way, or 'none'"
+    )
 
 
 DEFAULT_PREFERENCES = RidePreferences(
@@ -77,6 +82,7 @@ DEFAULT_PREFERENCES = RidePreferences(
     bicycle_type="Hybrid",
     speed_mph=10,
     avoid_streets=[],
+    stop_type="none",
 )
 
 INSTRUCTIONS_FOR_AI = """You turn a cyclist's request into route settings for a bike
@@ -91,6 +97,8 @@ Guidelines:
 - "Training", "workout", "I want hills" -> lower avoid_hills (toward 0).
 - "Fastest", "in a hurry", "late" -> raise speed_importance.
 - Skinny tires / road bike -> Road and raise avoid_unpaved. Gravel or trails -> Cross or Mountain.
+- stop_type: only set it if the rider asks to stop somewhere ("grab coffee" -> coffee,
+  "refill my bottle" -> water, "need a bathroom" -> restroom, "flat tire" -> bike_shop).
 - Only list streets in avoid_streets if the rider names them. Use full official names
   (e.g. "Capitol Expy" -> "Capitol Expressway").
 """

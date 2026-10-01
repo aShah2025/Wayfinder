@@ -55,6 +55,7 @@ def measure_route(road_details, avoid_streets=()):
     total_km = 0
     avoided_street_points = []  # spots on streets the rider said to avoid
     previous_elevation = None
+    elevation_profile = []      # [miles from start, height in feet] for the chart
 
     for edge in edges:
         length = edge.get("length", 0)
@@ -66,6 +67,8 @@ def measure_route(road_details, avoid_streets=()):
             climb_m += elevation - previous_elevation
         if elevation is not None:
             previous_elevation = elevation
+            elevation_profile.append([round(total_km * KM_TO_MILES, 2),
+                                      round(elevation * METERS_TO_FEET)])
 
         # Steepest hill: ignore tiny pieces, where elevation data is noisy.
         if length >= 0.05:
@@ -99,7 +102,16 @@ def measure_route(road_details, avoid_streets=()):
         "bike_lane_percent": round(100 * bike_km / total_km) if total_km else 0,
         "uses_avoided_street": len(avoided_street_points) > 0,
         "avoided_street_points": avoided_street_points,
+        "elevation_profile": shrink(elevation_profile, 80),
     }
+
+
+def shrink(points, max_points):
+    """Keep at most max_points evenly spaced points, so we don't send thousands to the chart."""
+    if len(points) <= max_points:
+        return points
+    step = len(points) / max_points
+    return [points[int(i * step)] for i in range(max_points)] + [points[-1]]
 
 
 def score_route(route, metrics, prefs):

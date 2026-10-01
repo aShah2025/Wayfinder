@@ -71,20 +71,23 @@ def decode_polyline(encoded, precision=6):
     return points
 
 
-async def get_bike_route(start, end, settings=None, avoid_points=None):
+async def get_bike_route(start, end, settings=None, avoid_points=None, stop=None):
     """
     Ask Valhalla for a bike route from start to end.
     start and end look like {"lat": 37.33, "lon": -121.88}.
     avoid_points = optional list of [lon, lat] spots on roads the route must not use.
+    stop = optional place to visit on the way (from stops.py).
     Returns a simple dictionary the website can use.
     """
     bike_settings = {**DEFAULT_SETTINGS, **(settings or {})}
 
+    locations = [{"lat": start["lat"], "lon": start["lon"]}]
+    if stop:
+        locations.append({"lat": stop["lat"], "lon": stop["lon"]})
+    locations.append({"lat": end["lat"], "lon": end["lon"]})
+
     request_body = {
-        "locations": [
-            {"lat": start["lat"], "lon": start["lon"]},
-            {"lat": end["lat"], "lon": end["lon"]},
-        ],
+        "locations": locations,
         "costing": "bicycle",
         "costing_options": {"bicycle": bike_settings},
         "directions_options": {"units": "miles"},
@@ -105,35 +108,43 @@ async def get_bike_route(start, end, settings=None, avoid_points=None):
         raise RouteError(data.get("error", "Couldn't find a bike route."))
 
     trip = data["trip"]
-    leg = trip["legs"][0]  # one "leg" = start to end with no stops in between
+
+    # A "leg" is one part of the trip: start -> end, or start -> stop and stop -> end.
+    # Glue the legs together into one line and one list of steps.
+    geometry = []
+    steps = []
+    for leg_number, leg in enumerate(trip["legs"]):
+        points = decode_polyline(leg["shape"])
+        geometry += points if leg_number == 0 else points[1:]  # skip the repeated joining point
+
+        is_last_leg = leg_number == len(trip["legs"]) - 1
+        for m in leg["maneuvers"]:
+            steps.append({"instruction": m["instruction"], "distance_miles": round(m["length"], 2)})
+        if not is_last_leg:
+            steps[-1]["instruction"] = f"Arrive at your stop: {stop['name']}."
 
     return {
         "distance_miles": round(trip["summary"]["length"], 2),
         "duration_minutes": round(trip["summary"]["time"] / 60),
-        "geometry": decode_polyline(leg["shape"]),
-        "steps": [
-            {
-                "instruction": m["instruction"],
-                "distance_miles": round(m["length"], 2),
-            }
-            for m in leg["maneuvers"]
-        ],
+        "geometry": geometry,
+        "steps": steps,
         "settings_used": bike_settings,
-        "encoded_shape": leg["shape"],  # kept so we can look up road details later
     }
 
 
-async def get_road_details(encoded_shape):
+async def get_road_details(geometry):
     """
     Ask Valhalla about every road piece ("edge") along a route:
     what kind of road it is, whether it has a bike lane, how fast cars go,
     how steep it is, and its elevation.
     This is the raw data our scoring code uses to judge a route.
+    geometry = the route's list of [lon, lat] points.
     """
     request_body = {
-        "encoded_polyline": encoded_shape,
+        "shape": [{"lon": lon, "lat": lat} for lon, lat in geometry],
         "costing": "bicycle",
-        "shape_match": "edge_walk",  # the shape came from Valhalla, so it matches exactly
+        # Try an exact match first; if that fails, snap the line to the nearest roads.
+        "shape_match": "walk_or_snap",
         "filters": {
             "action": "include",
             "attributes": [

@@ -16,7 +16,7 @@ const map = new maplibregl.Map({
   zoom: 12,
 });
 
-map.addControl(new maplibregl.NavigationControl(), "bottom-right");
+map.addControl(new maplibregl.NavigationControl(), "top-right");
 
 // The start and end points the user picked. null = not picked yet.
 const places = { from: null, to: null };
@@ -33,6 +33,7 @@ let selectedIndex = 0;
 const markers = {
   from: new maplibregl.Marker({ color: "#34a853" }),
   to: new maplibregl.Marker({ color: "#ea4335" }),
+  stop: new maplibregl.Marker({ color: "#f9ab00" }),  // yellow = stop on the way
 };
 
 
@@ -95,6 +96,26 @@ function setUpSearchBox(which) {
 setUpSearchBox("from");
 setUpSearchBox("to");
 
+// The 📍 button: use the device's GPS location as the starting point.
+document.getElementById("my-location").addEventListener("click", () => {
+  if (!navigator.geolocation) {
+    showStatus("Your browser can't share its location.", true);
+    return;
+  }
+  showStatus("Finding your location...");
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      showStatus("");
+      pickPlace("from", {
+        label: "My location",
+        lat: position.coords.latitude,
+        lon: position.coords.longitude,
+      });
+    },
+    () => showStatus("Couldn't get your location. Check your browser's permission.", true)
+  );
+});
+
 
 // ============ 3. GETTING A ROUTE ============
 
@@ -127,7 +148,20 @@ async function findRoute() {
   }
 
   button.disabled = true;
-  showStatus("🤖 Reading your request and comparing routes...");
+
+  // Show what's happening while the server works (it takes a few seconds).
+  const loadingMessages = [
+    "🤖 Reading your request...",
+    "🗺️ Building route options...",
+    "⛰️ Measuring hills and traffic on every street...",
+    "⚖️ Scoring routes for you...",
+  ];
+  let messageNumber = 0;
+  showStatus(loadingMessages[0]);
+  const loadingTimer = setInterval(() => {
+    messageNumber = Math.min(messageNumber + 1, loadingMessages.length - 1);
+    showStatus(loadingMessages[messageNumber]);
+  }, 1500);
 
   try {
     // Send the request to our Python server (the /api/route function in main.py).
@@ -154,6 +188,15 @@ async function findRoute() {
     showResults(data);
     selectRoute(0); // the best route comes first
 
+    // Show the stop on the way (if any) as a yellow pin.
+    if (data.stop) {
+      markers.stop.setLngLat([data.stop.lon, data.stop.lat])
+        .setPopup(new maplibregl.Popup().setText(data.stop.emoji + " " + data.stop.name))
+        .addTo(map);
+    } else {
+      markers.stop.remove();
+    }
+
     // Invite a follow-up, like a conversation.
     instructionsBox.value = "";
     instructionsBox.placeholder = "Want changes? e.g. 'ok but shorter' or 'avoid Monterey Rd too'";
@@ -161,6 +204,7 @@ async function findRoute() {
   } catch (error) {
     showStatus("Couldn't reach the server. Is it running?", true);
   } finally {
+    clearInterval(loadingTimer);
     button.disabled = false;
   }
 }
@@ -203,6 +247,7 @@ function showResults(data) {
     p.bicycle_type + " bike · " + p.speed_mph + " mph",
   ];
   for (const street of p.avoid_streets) tagTexts.push("🚫 " + street);
+  if (data.stop) tagTexts.push(data.stop.emoji + " Stop: " + data.stop.name);
   for (const text of tagTexts) tags.appendChild(makeElement("span", "tag", text));
   understood.appendChild(tags);
   results.appendChild(understood);
@@ -239,6 +284,12 @@ function showResults(data) {
     results.appendChild(card);
   });
 
+  // --- Elevation chart for the selected route (drawn by selectRoute) ---
+  const chartBox = makeElement("div", "elevation-box");
+  chartBox.appendChild(makeElement("strong", "", "Elevation"));
+  chartBox.appendChild(makeElement("div", "elevation-chart"));
+  results.appendChild(chartBox);
+
   // --- Turn-by-turn steps for the selected route (filled in by selectRoute) ---
   const stepsBox = makeElement("details", "steps-box");
   stepsBox.appendChild(makeElement("summary", "", "Turn-by-turn directions"));
@@ -265,7 +316,45 @@ function selectRoute(index) {
     steps.appendChild(item);
   }
 
+  drawElevationChart(route.metrics.elevation_profile);
   drawRoutes();
+}
+
+// Draw a simple hill-shaped chart of height along the route, as an SVG picture.
+// Each point is [miles from start, height in feet].
+function drawElevationChart(profile) {
+  const chart = document.querySelector(".elevation-chart");
+  if (!profile || profile.length < 2) {
+    chart.textContent = "No elevation data for this route.";
+    return;
+  }
+
+  const width = 300;
+  const height = 70;
+  const miles = profile.map((point) => point[0]);
+  const feet = profile.map((point) => point[1]);
+  const maxMiles = Math.max(...miles) || 1;
+  const lowest = Math.min(...feet);
+  const highest = Math.max(...feet);
+  const range = Math.max(highest - lowest, 30); // so flat routes don't look like mountains
+
+  // Convert each [miles, feet] into an x, y position inside the picture.
+  // (SVG's y goes DOWN, so higher ground needs a smaller y.)
+  const xy = profile.map(([mi, ft]) => [
+    (mi / maxMiles) * width,
+    height - ((ft - lowest) / range) * (height - 6),
+  ]);
+  const line = xy.map(([x, y]) => x.toFixed(1) + "," + y.toFixed(1)).join(" ");
+  const filled = "0," + height + " " + line + " " + width + "," + height;
+
+  chart.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+      <polygon points="${filled}" class="elevation-fill" />
+      <polyline points="${line}" class="elevation-line" />
+    </svg>
+    <div class="elevation-labels">
+      <span>Low ${lowest} ft</span><span>High ${highest} ft</span>
+    </div>`;
 }
 
 // Draw every route option: the selected one in blue, the others in gray.
