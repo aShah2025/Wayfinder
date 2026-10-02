@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wayfinder</title>
+
+    <!-- MapLibre: free library that draws the interactive map -->
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <!-- The map fills the whole screen behind everything -->
+    <div id="map"></div>
+
+    <!-- The floating panel on the left, like Google Maps -->
+    <div id="panel">
+      <h1>🚲 Wayfinder</h1>
+      <p class="tagline">Bike routes that actually listen to you.</p>
+
+      <!-- Start and destination search boxes.
+           Each has a hidden list underneath for search suggestions. -->
+      <div class="search-box">
+        <span class="dot start-dot"></span>
+        <input id="from" type="text" placeholder="Choose starting point" autocomplete="off">
+        <button id="my-location" type="button" title="Use my location">📍</button>
+        <ul class="suggestions" id="from-suggestions"></ul>
+      </div>
+      <div class="search-box">
+        <span class="dot end-dot"></span>
+        <input id="to" type="text" placeholder="Choose destination" autocomplete="off">
+        <ul class="suggestions" id="to-suggestions"></ul>
+      </div>
+
+      <label for="instructions">How do you want to ride?</label>
+      <textarea id="instructions" rows="3"
+        placeholder="e.g. avoid big hills, I'm riding with my kid, stay off busy roads"></textarea>
+
+      <button id="go">Find my route</button>
+
+      <!-- Filled in by app.js after a route is found -->
+      <div id="status"></div>
+      <div id="results"></div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
