@@ -61,7 +61,7 @@ input, textarea {
   padding: 10px;
   border: 1px solid #dadce0;
   border-radius: 8px;
-  font-size: 15px;
+  font-size: 16px;           /* 16px+ stops iPhones from zooming in when you tap a box */
   font-family: inherit;
 }
 
@@ -113,8 +113,14 @@ input:focus, textarea:focus {
   font-size: 14px;
 }
 
-.suggestions li:hover {
-  background: #f1f3f4;
+.suggestions li:hover,
+.suggestions li.active {
+  background: #e8f0fe;
+}
+
+.suggestions li.no-results {
+  color: #5f6368;
+  cursor: default;
 }
 
 /* ---------- Button ---------- */
@@ -223,6 +229,13 @@ input:focus, textarea:focus {
 
 .route-card:hover {
   background: #f8f9fa;
+}
+
+.route-card:focus-visible,
+#go:focus-visible,
+#my-location:focus-visible {
+  outline: 3px solid #1a73e8;
+  outline-offset: 2px;
 }
 
 .route-card.selected {

@@ -1,3 +1,5 @@
+import asyncio
+
 from dotenv import load_dotenv
 
 # Read secrets (like the Gemini API key) from the .env file.
@@ -6,7 +8,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.ai_parser import AIUnavailable, RidePreferences
 from backend.geocode import search_places
@@ -37,7 +39,7 @@ class Point(BaseModel):
 class RouteRequest(BaseModel):
     start: Point
     end: Point
-    instructions: str = ""  # what the rider typed, e.g. "avoid hills"
+    instructions: str = Field("", max_length=500)  # what the rider typed, e.g. "avoid hills"
     # The preferences from the last route, so follow-ups like "ok but shorter" work.
     previous_preferences: RidePreferences | None = None
 
@@ -46,12 +48,19 @@ class RouteRequest(BaseModel):
 @app.post("/api/route")
 async def route(request: RouteRequest):
     try:
-        return await plan_ride(
-            request.start.model_dump(),
-            request.end.model_dump(),
-            request.instructions,
-            request.previous_preferences,
+        # Never make the rider wait forever: give up after 45 seconds.
+        return await asyncio.wait_for(
+            plan_ride(
+                request.start.model_dump(),
+                request.end.model_dump(),
+                request.instructions,
+                request.previous_preferences,
+            ),
+            timeout=45,
         )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="The free map servers are slow right now. "
+                            "Please try again in a moment.")
     except RouteError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except AIUnavailable as error:

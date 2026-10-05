@@ -15,7 +15,7 @@ METERS_TO_FEET = 3.28084
 
 # Road types that usually carry lots of fast traffic.
 BUSY_ROAD_CLASSES = {"motorway", "trunk", "primary", "secondary"}
-BUSY_SPEED_KMH = 56  # 35 mph or faster counts as busy
+BUSY_SPEED_LIMIT_KMH = 56  # a posted car speed limit of 35 mph or more counts as busy
 
 # Ways that are built for bikes.
 BIKE_PATH_USES = {"cycleway", "path", "mountain_bike", "living_street"}
@@ -34,11 +34,16 @@ def simplify_name(name):
 
 
 def is_avoided_street(edge_names, avoid_streets):
-    """True if this road piece is on one of the streets the rider wants to avoid."""
+    """
+    True if this road piece is on one of the streets the rider wants to avoid.
+    Matches whole words only, so avoiding "1st St" doesn't also avoid "21st St",
+    but avoiding "Capitol Ave" still catches "North Capitol Ave".
+    """
     for name in edge_names:
+        road = f" {simplify_name(name)} "
         for avoid in avoid_streets:
-            a, b = simplify_name(name), simplify_name(avoid)
-            if a == b or a in b or b in a:
+            avoided = simplify_name(avoid)
+            if avoided and f" {avoided} " in road:
                 return True
     return False
 
@@ -79,7 +84,7 @@ def measure_route(road_details, avoid_streets=()):
         is_busy = (edge.get("use") == "road"
                    and edge.get("cycle_lane") != "separated"
                    and (edge.get("road_class") in BUSY_ROAD_CLASSES
-                        or edge.get("speed", 0) >= BUSY_SPEED_KMH))
+                        or (edge.get("speed_limit") or 0) >= BUSY_SPEED_LIMIT_KMH))
         if is_bike_way:
             bike_km += length
         if is_busy:
@@ -163,6 +168,8 @@ def explain_choice(best, standard, prefs):
         reasons.append(f"{climb_change} ft more climbing for your workout")
     if prefs.avoid_hills > 0 and climb_change >= 10:
         tradeoffs.append(f"{climb_change} ft more climbing")
+    if prefs.avoid_hills < 0 and climb_change <= -10:
+        tradeoffs.append(f"{-climb_change} ft less climbing than the standard route")
     if prefs.avoid_hills >= 0.5 and b["steepest_grade"] < s["steepest_grade"]:
         reasons.append(f"steepest hill is {b['steepest_grade']}% instead of {s['steepest_grade']}%")
 
@@ -181,6 +188,8 @@ def explain_choice(best, standard, prefs):
         reasons.append(f"{-lane_change} fewer miles on bike lanes, as you asked")
     if prefs.prefer_bike_lanes > 0 and lane_change <= -0.1:
         tradeoffs.append(f"{-lane_change} fewer miles on bike lanes")
+    if prefs.prefer_bike_lanes < 0 and lane_change >= 0.1:
+        tradeoffs.append(f"{lane_change} more miles on bike lanes")
 
     if s["uses_avoided_street"] and not b["uses_avoided_street"]:
         reasons.append("stays off " + ", ".join(prefs.avoid_streets))

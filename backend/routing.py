@@ -9,6 +9,7 @@ how much to avoid busy roads...) and it finds the best path for those settings.
 The settings are the important part: later, the AI will choose them based on
 what the rider asks for.
 """
+import json
 import os
 
 from backend.web import ServiceUnavailable, request_json
@@ -32,14 +33,25 @@ class RouteError(Exception):
     """Raised when Valhalla can't find a route (e.g. a point is in the ocean)."""
 
 
+# Remember Valhalla's answers, so the exact same request (like re-running a demo
+# trip) comes back instantly and doesn't load the free public server.
+_valhalla_cache = {}
+
+
 async def call_valhalla(endpoint, request_body):
     """Send a request to Valhalla (with automatic retries). Returns (status, data)."""
+    cache_key = endpoint + json.dumps(request_body, sort_keys=True)
+    if cache_key in _valhalla_cache:
+        return _valhalla_cache[cache_key]
     try:
-        return await request_json("POST", f"{VALHALLA_URL}/{endpoint}",
-                                  json=request_body, timeout=30)
+        answer = await request_json("POST", f"{VALHALLA_URL}/{endpoint}",
+                                    json=request_body, timeout=15)
     except ServiceUnavailable:
         raise RouteError("The free routing server is busy right now. "
                          "Please try again in a few seconds.")
+    if len(_valhalla_cache) < 1000:
+        _valhalla_cache[cache_key] = answer
+    return answer
 
 
 def friendly_error(valhalla_message):
@@ -162,7 +174,7 @@ async def get_road_details(geometry):
             "action": "include",
             "attributes": [
                 "edge.length", "edge.names", "edge.road_class", "edge.use",
-                "edge.cycle_lane", "edge.speed", "edge.mean_elevation",
+                "edge.cycle_lane", "edge.speed_limit", "edge.mean_elevation",
                 "edge.max_upward_grade", "edge.begin_shape_index",
                 "edge.end_shape_index", "shape",
             ],

@@ -56,7 +56,11 @@ async function searchPlaces(text) {
 // Save a picked place: remember it, fill the box, drop a pin, move the map.
 function pickPlace(which, place) {
   places[which] = place;
-  lastPreferences = null;   // new trip, so start fresh instead of a follow-up
+  // New trip: keep how the rider likes to ride (kid, hills...), but forget the
+  // things that only made sense for the old trip (streets to avoid, the stop).
+  if (lastPreferences) {
+    lastPreferences = { ...lastPreferences, avoid_streets: [], stop_type: "none" };
+  }
   document.getElementById(which).value = place.label;
   markers[which].setLngLat([place.lon, place.lat]).addTo(map);
   map.flyTo({ center: [place.lon, place.lat], zoom: 14 });
@@ -82,25 +86,54 @@ function setUpSearchBox(which) {
     // Wait until they stop typing for 0.3 seconds, so we don't search on every key.
     typingTimer = setTimeout(async () => {
       const results = await searchPlaces(text);
-      // If the user kept typing while we waited, these results are old. Ignore them.
-      if (input.value.trim() !== text) return;
+      // If the user kept typing (or left the box) while we waited, these results are old.
+      if (input.value.trim() !== text || document.activeElement !== input) return;
       list.innerHTML = "";
+      highlighted = -1;
       for (const place of results) {
         const item = document.createElement("li");
         item.textContent = place.label;
-        item.addEventListener("click", () => {
+        item.setAttribute("role", "option");
+        // "mousedown" fires before the box loses focus, so the click always counts.
+        item.addEventListener("mousedown", (event) => {
+          event.preventDefault();
           pickPlace(which, place);
           list.innerHTML = "";
         });
+        item.place = place;
         list.appendChild(item);
+      }
+      if (results.length === 0) {
+        list.appendChild(Object.assign(document.createElement("li"), {
+          textContent: "No places found in California", className: "no-results",
+        }));
       }
     }, 300);
   });
 
-  // Hide the suggestions when the user clicks somewhere else.
-  input.addEventListener("blur", () => {
-    setTimeout(() => (list.innerHTML = ""), 200); // small delay so clicks still register
+  // Arrow keys move through suggestions, Enter picks one, Escape closes the list.
+  let highlighted = -1;
+  input.addEventListener("keydown", (event) => {
+    const items = [...list.querySelectorAll("li")].filter((li) => li.place);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (items.length === 0) return;
+      event.preventDefault();
+      highlighted += event.key === "ArrowDown" ? 1 : -1;
+      highlighted = (highlighted + items.length) % items.length;
+      items.forEach((li, i) => li.classList.toggle("active", i === highlighted));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (items.length > 0) {
+        pickPlace(which, items[Math.max(highlighted, 0)].place);
+        list.innerHTML = "";
+      }
+    } else if (event.key === "Escape") {
+      list.innerHTML = "";
+    }
   });
+
+  // Hide the suggestions when the user clicks somewhere else.
+  input.addEventListener("blur", () => (list.innerHTML = ""));
 }
 
 setUpSearchBox("from");
@@ -148,16 +181,28 @@ function showStatus(message, isError = false) {
   status.className = isError ? "error" : "";
 }
 
+let busy = false; // true while a route is being planned, so clicks can't double up
+
+// Wait for a promise, but give up after `ms` milliseconds.
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("timeout")), ms))]);
+}
+
 async function findRoute() {
+  if (busy) return;
+  busy = true;
   const button = document.getElementById("go");
   const instructionsBox = document.getElementById("instructions");
+  button.disabled = true;
 
+  showStatus("Finding your places...");
   if (!(await makeSurePicked("from")) || !(await makeSurePicked("to"))) {
     showStatus("Please choose both a start and a destination.", true);
+    button.disabled = false;
+    busy = false;
     return;
   }
-
-  button.disabled = true;
 
   // Show what's happening while the server works (it takes a few seconds).
   const loadingMessages = [
@@ -173,29 +218,33 @@ async function findRoute() {
     showStatus(loadingMessages[messageNumber]);
   }, 1500);
 
+  const sentInstructions = instructionsBox.value;
+  let response = null;
   try {
     // Send the request to our Python server (the /api/route function in main.py).
-    const response = await fetch("/api/route", {
+    response = await withTimeout(fetch("/api/route", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         start: { lat: places.from.lat, lon: places.from.lon },
         end: { lat: places.to.lat, lon: places.to.lon },
-        instructions: instructionsBox.value,
+        instructions: sentInstructions,
         previous_preferences: lastPreferences,
       }),
-    });
-    const data = await response.json();
+    }), 60000);
+    const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      showStatus(data.detail || "Something went wrong.", true);
+      showStatus(typeof data.detail === "string" ? data.detail
+        : "Something went wrong planning this ride. Please try again.", true);
       return;
     }
 
     showStatus("");
     lastPreferences = data.preferences;
     currentRoutes = data.routes;
-    await mapReady; // make sure the map can draw before we add routes to it
+    // Make sure the map can draw before we add routes to it (but don't wait forever).
+    await withTimeout(mapReady, 10000).catch(() => {});
     showResults(data);
     selectRoute(0); // the best route comes first
 
@@ -208,15 +257,23 @@ async function findRoute() {
       markers.stop.remove();
     }
 
-    // Invite a follow-up, like a conversation.
-    instructionsBox.value = "";
+    // Invite a follow-up, like a conversation (unless they already typed something new).
+    if (instructionsBox.value === sentInstructions) instructionsBox.value = "";
     instructionsBox.placeholder = "Want changes? e.g. 'ok but shorter' or 'avoid Monterey Rd too'";
     button.textContent = "Update route";
   } catch (error) {
-    showStatus("Couldn't reach the server. Is it running?", true);
+    if (error.message === "timeout") {
+      showStatus("This is taking too long. The free map servers may be busy. Please try again.", true);
+    } else if (response === null) {
+      showStatus("Couldn't reach the Wayfinder server. Check your connection and try again.", true);
+    } else {
+      console.error(error);
+      showStatus("Something went wrong showing this route. Please try again.", true);
+    }
   } finally {
     clearInterval(loadingTimer);
     button.disabled = false;
+    busy = false;
   }
 }
 
@@ -226,7 +283,7 @@ document.getElementById("go").addEventListener("click", findRoute);
 document.getElementById("instructions").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
-    if (!document.getElementById("go").disabled) findRoute();
+    findRoute();
   }
 });
 
@@ -324,7 +381,17 @@ function showResults(data) {
     stats.appendChild(makeElement("span", "", "🚲 " + m.bike_lane_percent + "% bike lanes"));
     card.appendChild(stats);
 
+    // Cards work with a mouse AND with the keyboard (Tab to it, then Enter or Space).
+    card.setAttribute("role", "button");
+    card.tabIndex = 0;
+    card.setAttribute("aria-label", route.name + " route, " + route.duration_minutes + " minutes");
     card.addEventListener("click", () => selectRoute(index));
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectRoute(index);
+      }
+    });
     results.appendChild(card);
   });
 
@@ -347,7 +414,9 @@ function selectRoute(index) {
   const route = currentRoutes[index];
 
   document.querySelectorAll(".route-card").forEach((card) => {
-    card.classList.toggle("selected", Number(card.dataset.index) === index);
+    const isSelected = Number(card.dataset.index) === index;
+    card.classList.toggle("selected", isSelected);
+    card.setAttribute("aria-pressed", isSelected);
   });
 
   const steps = document.querySelector(".steps");

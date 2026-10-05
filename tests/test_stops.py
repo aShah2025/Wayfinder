@@ -28,3 +28,17 @@ def test_shrink_keeps_the_last_point():
     small = shrink(points, 80)
     assert len(small) <= 81
     assert small[0] == [0, 0] and small[-1] == [499, 499]
+
+
+def test_make_safe_cleans_preferences_from_the_browser():
+    from backend.ai_parser import DEFAULT_PREFERENCES, make_safe
+    bad = DEFAULT_PREFERENCES.model_copy(update={
+        "speed_mph": 0, "avoid_hills": 5, "prefer_bike_lanes": -9,
+        "avoid_streets": ["", " ", "a", "Main St", "main st"] + [f"Street {i}" for i in range(20)],
+    })
+    safe = make_safe(bad)
+    assert safe.speed_mph == 4
+    assert safe.avoid_hills == 1.0
+    assert safe.prefer_bike_lanes == -1.0
+    assert safe.avoid_streets[0] == "Main St"
+    assert len(safe.avoid_streets) == 5

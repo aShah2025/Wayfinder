@@ -13,11 +13,11 @@ from backend.scoring import (explain_choice, find_unmet_requests, is_avoided_str
 # ---------- helpers to build fake data ----------
 
 def make_edge(length_km=1.0, elevation=10, use="road", road_class="residential",
-              cycle_lane="none", speed=40, grade=0, names=("Main Street",)):
+              cycle_lane="none", speed_limit=40, grade=0, names=("Main Street",)):
     """A fake road piece shaped like Valhalla's data."""
     return {
         "length": length_km, "mean_elevation": elevation, "use": use,
-        "road_class": road_class, "cycle_lane": cycle_lane, "speed": speed,
+        "road_class": road_class, "cycle_lane": cycle_lane, "speed_limit": speed_limit,
         "max_upward_grade": grade, "names": list(names),
         "begin_shape_index": 0, "end_shape_index": 1,
     }
@@ -59,12 +59,19 @@ def test_valhalla_settings_flip_the_scale():
 
 def test_avoiding_bike_lanes_turns_valhalla_toward_roads():
     settings = to_valhalla_settings(prefs_with(prefer_bike_lanes=-1.0, avoid_busy_roads=0.5))
-    assert settings["use_roads"] == 1.0
+    assert settings["use_roads"] >= 0.9
 
 
 def test_wanting_bike_lanes_turns_valhalla_toward_paths():
-    settings = to_valhalla_settings(prefs_with(prefer_bike_lanes=1.0, avoid_busy_roads=0.2))
+    settings = to_valhalla_settings(prefs_with(prefer_bike_lanes=1.0, avoid_busy_roads=0.8))
     assert settings["use_roads"] == 0.0
+
+
+def test_traffic_preference_still_matters_with_default_bike_lanes():
+    # Bug found in review: avoid_busy_roads used to have no effect at all here.
+    calm = to_valhalla_settings(prefs_with(avoid_busy_roads=0.9))
+    brave = to_valhalla_settings(prefs_with(avoid_busy_roads=0.1))
+    assert calm["use_roads"] < brave["use_roads"]
 
 
 def test_wanting_hills_never_goes_past_valhallas_max():
@@ -82,7 +89,7 @@ def test_climb_only_counts_uphill():
 def test_busy_roads_and_bike_lanes_are_counted():
     edges = [
         make_edge(length_km=1.0, road_class="primary"),            # busy
-        make_edge(length_km=1.0, speed=60),                        # fast = busy
+        make_edge(length_km=1.0, speed_limit=64),                  # 40 mph limit = busy
         make_edge(length_km=1.0, use="cycleway"),                  # bike path
         make_edge(length_km=1.0, cycle_lane="dedicated"),          # painted bike lane
         make_edge(length_km=1.0, road_class="primary", cycle_lane="separated"),  # protected: not busy
@@ -102,6 +109,17 @@ def test_avoided_street_names_match_abbreviations():
     assert is_avoided_street(["Capitol Expy"], ["Capitol Expressway"])
     assert is_avoided_street(["North Capitol Avenue"], ["capitol ave"])
     assert not is_avoided_street(["Monterey Road"], ["Capitol Expressway"])
+
+
+def test_avoided_street_matches_whole_words_only():
+    # Bugs found in review: substring matching caught the wrong streets.
+    assert not is_avoided_street(["South 21st Street"], ["1st Street"])
+    assert not is_avoided_street(["Almaden Expressway"], ["Alma"])
+    assert is_avoided_street(["North 1st Street"], ["1st Street"])
+
+
+def test_blank_avoided_street_matches_nothing():
+    assert not is_avoided_street(["Main Street"], ["", "  "])
 
 
 def test_route_on_avoided_street_is_flagged():
@@ -169,8 +187,10 @@ def test_explanation_never_praises_bike_lanes_to_someone_avoiding_them():
     prefs = prefs_with(prefer_bike_lanes=-1.0)
     standard = fake_route(30, bike=1.0, geometry=[[0, 0]])
     best = fake_route(30, bike=2.0, geometry=[[1, 1]])
-    reasons = " ".join(explain_choice(best, standard, prefs))
-    assert "more miles on bike lanes" not in reasons
+    reasons = explain_choice(best, standard, prefs)
+    benefits = [r for r in reasons if not r.startswith("Tradeoff:")]
+    assert not any("more miles on bike lanes" in r for r in benefits)
+    assert "Tradeoff: 1.0 more miles on bike lanes" in reasons  # honestly listed as a cost
 
 
 def test_explanation_credits_fewer_bike_lanes_when_asked():

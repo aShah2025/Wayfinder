@@ -16,15 +16,20 @@ from typing import Literal
 from google import genai
 from pydantic import BaseModel, Field
 
-# Models to try, in order. Google's models are sometimes overloaded ("503"),
-# so if one fails we automatically try the next. "lite" models are fast and
-# plenty smart for filling in a form.
+# Models to try, in order. Google's models are sometimes overloaded ("503") and the
+# free tier allows 15 requests per minute PER MODEL ("429"), so if one fails we
+# automatically try the next. Each is a genuinely different model with its own limit.
+# "lite" models are fast and plenty smart for filling in a form.
 MODELS = [
     "gemini-3.5-flash-lite",
-    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
     "gemini-flash-latest",
 ]
+
+# Remember answers we've already gotten, so asking the exact same thing again
+# (like rehearsing a demo) is instant and doesn't use up the free AI limit.
+_answer_cache = {}
 
 
 class AIUnavailable(Exception):
@@ -114,6 +119,28 @@ def clamp(value, low=0.0, high=1.0):
     return max(low, min(high, value))
 
 
+def make_safe(prefs):
+    """
+    Never fully trust preferences, whether they came from the AI or from the browser.
+    Force every number into its allowed range and clean up the street list.
+    """
+    prefs = prefs.model_copy()
+    for field in ["avoid_busy_roads", "speed_importance", "avoid_unpaved"]:
+        setattr(prefs, field, clamp(getattr(prefs, field)))
+    for field in ["avoid_hills", "prefer_bike_lanes"]:  # these two can be negative
+        setattr(prefs, field, clamp(getattr(prefs, field), -1.0, 1.0))
+    prefs.speed_mph = clamp(prefs.speed_mph, 4, 25)
+
+    streets = []
+    for street in prefs.avoid_streets:
+        street = street.strip()[:60]
+        if len(street) >= 3 and street.lower() not in [s.lower() for s in streets]:
+            streets.append(street)
+    prefs.avoid_streets = streets[:5]  # a blank or 1-letter name would match every road
+    prefs.understood = prefs.understood.strip()[:200]
+    return prefs
+
+
 async def parse_instructions(text, previous=None):
     """
     Turn the rider's words into RidePreferences.
@@ -121,7 +148,7 @@ async def parse_instructions(text, previous=None):
     "ok but shorter" can ADJUST them instead of starting over.
     """
     if not text.strip():
-        return previous or DEFAULT_PREFERENCES
+        return make_safe(previous) if previous else DEFAULT_PREFERENCES
 
     prompt = INSTRUCTIONS_FOR_AI
     if previous:
@@ -132,6 +159,9 @@ async def parse_instructions(text, previous=None):
         )
     prompt += f'\n\nRider\'s request: "{text}"'
 
+    if prompt in _answer_cache:
+        return _answer_cache[prompt].model_copy()
+
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         print("[ai_parser] GEMINI_API_KEY is missing from .env")
@@ -139,7 +169,9 @@ async def parse_instructions(text, previous=None):
 
     client = genai.Client(
         api_key=api_key,
-        http_options={"timeout": 15000},  # give up on a model after 15 seconds
+        # Give up on a model after 10 seconds (Google's minimum) and move straight to
+        # the next one, instead of the library quietly retrying the same busy model.
+        http_options={"timeout": 10000, "retry_options": {"attempts": 1}},
     )
 
     prefs = None
@@ -163,13 +195,11 @@ async def parse_instructions(text, previous=None):
     if prefs is None:
         raise AIUnavailable("The AI is busy right now. Please try again in a moment.")
 
-    # Double-check the AI's numbers are in range. Never fully trust AI output!
-    for field in ["avoid_busy_roads", "speed_importance", "avoid_unpaved"]:
-        setattr(prefs, field, clamp(getattr(prefs, field)))
-    for field in ["avoid_hills", "prefer_bike_lanes"]:  # these two can be negative
-        setattr(prefs, field, clamp(getattr(prefs, field), -1.0, 1.0))
-    prefs.speed_mph = clamp(prefs.speed_mph, 4, 25)
-    return prefs
+    # Double-check the AI's answer. Never fully trust AI output!
+    prefs = make_safe(prefs)
+    if len(_answer_cache) < 500:
+        _answer_cache[prompt] = prefs
+    return prefs.model_copy()
 
 
 def to_valhalla_settings(prefs):
@@ -180,13 +210,9 @@ def to_valhalla_settings(prefs):
     Valhalla's "use_roads" is one dial for two of our preferences:
     low = stick to bike paths/lanes (and away from traffic), high = regular roads are fine.
     """
-    use_roads = 1 - prefs.avoid_busy_roads
-    if prefs.prefer_bike_lanes < 0:
-        # Rider wants to AVOID bike lanes: turn the dial toward regular roads.
-        use_roads = max(use_roads, 0.5 + 0.5 * -prefs.prefer_bike_lanes)
-    elif prefs.prefer_bike_lanes > 0:
-        # Rider wants bike lanes: turn the dial toward bike paths.
-        use_roads = min(use_roads, 0.5 - 0.5 * prefs.prefer_bike_lanes)
+    # Blend both preferences into the one dial: avoiding traffic turns it down,
+    # wanting bike lanes turns it down more, AVOIDING bike lanes (negative) turns it up.
+    use_roads = clamp(1 - prefs.avoid_busy_roads - 0.4 * prefs.prefer_bike_lanes)
 
     return {
         "bicycle_type": prefs.bicycle_type,

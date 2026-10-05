@@ -55,7 +55,7 @@ async def find_stop(start, end, stop_type):
     # in this box, and give me their center points".
     query = (f'[out:json][timeout:15];'
              f'nwr{STOP_TYPES[stop_type]["tag"]}({south},{west},{north},{east});'
-             f'out center 200;')
+             f'out center 3000;')
 
     try:
         status, data = await request_json("POST", OVERPASS_URL, data={"data": query},

@@ -42,9 +42,17 @@ async def build_candidate(name, description, start, end, stop, settings, avoid_s
     for _ in range(MAX_REROUTES if reroute else 0):
         if not metrics["uses_avoided_street"]:
             break
-        avoid_points = (avoid_points + metrics["avoided_street_points"])[:MAX_AVOID_POINTS]
-        route = await get_bike_route(start, end, settings, avoid_points, stop)
-        metrics = measure_route(await get_road_details(route["geometry"]), avoid_streets)
+        # Keep the most recent spots if the list gets long.
+        avoid_points = (avoid_points + metrics["avoided_street_points"])[-MAX_AVOID_POINTS:]
+        try:
+            new_route = await get_bike_route(start, end, settings, avoid_points, stop)
+            new_metrics = measure_route(await get_road_details(new_route["geometry"]),
+                                        avoid_streets)
+        except RouteError:
+            # Blocking those spots made the trip impossible (e.g. the destination is ON
+            # the avoided street). Keep the last good route; a warning will explain.
+            break
+        route, metrics = new_route, new_metrics
 
     route["name"] = name
     route["description"] = description
@@ -123,8 +131,11 @@ async def plan_ride(start, end, instructions, previous_prefs=None):
 
     # Step 5: lowest score wins. Explain it by comparing with the standard route.
     best = min(unique, key=lambda r: r["score"])
-    standard = next((r for r in candidates if r["name"] == "Standard"), best)
-    explanation = explain_choice(best, standard, prefs)
+    standard = next((r for r in candidates if r["name"] == "Standard"), None)
+    if standard:
+        explanation = explain_choice(best, standard, prefs)
+    else:
+        explanation = ["Couldn't build a standard route to compare against this time."]
     warnings = find_unmet_requests(best, prefs)  # be honest about what we couldn't do
     if ai_warning:
         warnings.insert(0, ai_warning)
