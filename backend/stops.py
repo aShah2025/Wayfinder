@@ -7,10 +7,9 @@ place in the area, then picks the one that adds the smallest detour.
 """
 import math
 
-import httpx
+from backend.web import ServiceUnavailable, request_json
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-HEADERS = {"User-Agent": "Wayfinder (ImpactHack student project)"}
 
 # Each stop type -> the OpenStreetMap tag that marks those places, plus an emoji.
 STOP_TYPES = {
@@ -59,12 +58,13 @@ async def find_stop(start, end, stop_type):
              f'out center 200;')
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(OVERPASS_URL, data={"data": query}, headers=HEADERS)
-        response.raise_for_status()
-        elements = response.json()["elements"]
-    except (httpx.HTTPError, ValueError, KeyError):
+        status, data = await request_json("POST", OVERPASS_URL, data={"data": query},
+                                          timeout=20, attempts=2)
+    except ServiceUnavailable:
         return None  # the stop is a bonus, so don't break the whole route if this fails
+    if status != 200:
+        return None
+    elements = data.get("elements", [])
 
     best = None
     for element in elements:

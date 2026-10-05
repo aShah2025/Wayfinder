@@ -10,13 +10,15 @@ planner.py: the step-by-step recipe for planning a ride.
 """
 import asyncio
 
-from backend.ai_parser import parse_instructions, to_valhalla_settings
+from backend.ai_parser import (DEFAULT_PREFERENCES, AIUnavailable, parse_instructions,
+                                to_valhalla_settings)
 from backend.routing import DEFAULT_SETTINGS, RouteError, get_bike_route, get_road_details
 from backend.scoring import explain_choice, find_unmet_requests, measure_route, score_route
-from backend.stops import find_stop
+from backend.stops import distance_km, find_stop
 
 MAX_REROUTES = 3        # how many times we try to steer around an avoided street
 MAX_AVOID_POINTS = 40   # don't send Valhalla an enormous list
+MAX_STRAIGHT_LINE_KM = 140  # the free Valhalla server refuses routes over 150 km
 
 
 def push_further(value):
@@ -51,8 +53,24 @@ async def build_candidate(name, description, start, end, stop, settings, avoid_s
 
 
 async def plan_ride(start, end, instructions, previous_prefs=None):
+    # Quick sanity checks before doing any slow work.
+    straight_line = distance_km(start, end)
+    if straight_line < 0.05:
+        raise RouteError("Your start and destination are the same place.")
+    if straight_line > MAX_STRAIGHT_LINE_KM:
+        raise RouteError("That trip is too long. Wayfinder plans bike rides up to about 90 miles.")
+
     # Step 1: AI turns words into preferences.
-    prefs = await parse_instructions(instructions, previous_prefs)
+    # If the AI is down, still give the rider a route with normal settings, and say so.
+    ai_warning = None
+    try:
+        prefs = await parse_instructions(instructions, previous_prefs)
+    except AIUnavailable:
+        prefs = (previous_prefs or DEFAULT_PREFERENCES).model_copy(
+            update={"understood": "The AI is busy, so this route uses "
+                    + ("your previous settings." if previous_prefs else "normal settings.")})
+        ai_warning = ("Couldn't reach the AI to read your instructions. "
+                      "Try again in a moment to get a route tailored to them.")
     ai_settings = to_valhalla_settings(prefs)
 
     # Every route goes through the same stop, so they can be compared fairly.
@@ -108,6 +126,8 @@ async def plan_ride(start, end, instructions, previous_prefs=None):
     standard = next((r for r in candidates if r["name"] == "Standard"), best)
     explanation = explain_choice(best, standard, prefs)
     warnings = find_unmet_requests(best, prefs)  # be honest about what we couldn't do
+    if ai_warning:
+        warnings.insert(0, ai_warning)
     if stop:
         explanation.insert(0, f"{stop['emoji']} stops at {stop['name']} on the way")
     elif prefs.stop_type != "none":

@@ -56,6 +56,11 @@ async def route(request: RouteRequest):
         raise HTTPException(status_code=400, detail=str(error))
     except AIUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error))
+    except Exception as error:
+        # Anything unexpected: log it for us, show a calm message to the rider.
+        print(f"[main] unexpected error planning a ride: {error!r}")
+        raise HTTPException(status_code=500,
+                            detail="Something went wrong planning this ride. Please try again.")
 
 
 # Serve the website. This must stay LAST, because "/" matches every address.

@@ -132,8 +132,13 @@ async def parse_instructions(text, previous=None):
         )
     prompt += f'\n\nRider\'s request: "{text}"'
 
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("[ai_parser] GEMINI_API_KEY is missing from .env")
+        raise AIUnavailable("The AI isn't set up (missing API key).")
+
     client = genai.Client(
-        api_key=os.environ["GEMINI_API_KEY"],
+        api_key=api_key,
         http_options={"timeout": 15000},  # give up on a model after 15 seconds
     )
 

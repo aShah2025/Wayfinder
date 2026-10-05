@@ -4,10 +4,9 @@ geocode.py: turns typed text like "Santana Row" into map coordinates.
 "Geocoding" = going from a place name or address to a latitude/longitude.
 We use Photon, a free search engine built on OpenStreetMap data.
 """
-import httpx
+from backend.web import ServiceUnavailable, request_json
 
 PHOTON_URL = "https://photon.komoot.io/api/"
-HEADERS = {"User-Agent": "Wayfinder (ImpactHack student project)"}
 
 # Only search inside California: [west, south, east, north] edges.
 CALIFORNIA_BOX = "-124.48,32.53,-114.13,42.01"
@@ -38,18 +37,22 @@ async def search_places(query, limit=5):
         "lon": SAN_JOSE["lon"],
         "lang": "en",
     }
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(PHOTON_URL, params=params, headers=HEADERS)
-    response.raise_for_status()
+    try:
+        status, data = await request_json("GET", PHOTON_URL, params=params, timeout=10)
+    except ServiceUnavailable:
+        return []  # search is busy: show no suggestions instead of crashing
+    if status != 200:
+        return []
 
     results = []
     seen_labels = set()
-    for feature in response.json()["features"]:
-        label = make_label(feature["properties"])
-        if label in seen_labels:  # OpenStreetMap often has several entries for one place
-            continue
+    for feature in data.get("features", []):
+        coordinates = feature.get("geometry", {}).get("coordinates")
+        label = make_label(feature.get("properties", {}))
+        if not coordinates or not label or label in seen_labels:
+            continue  # skip broken entries and repeats (OSM often lists a place twice)
         seen_labels.add(label)
 
-        lon, lat = feature["geometry"]["coordinates"]
+        lon, lat = coordinates
         results.append({"label": label, "lat": lat, "lon": lon})
     return results

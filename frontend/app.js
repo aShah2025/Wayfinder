@@ -18,6 +18,9 @@ const map = new maplibregl.Map({
 
 map.addControl(new maplibregl.NavigationControl(), "top-right");
 
+// A promise that finishes once the map has loaded, so we never draw a route too early.
+const mapReady = new Promise((resolve) => map.on("load", resolve));
+
 // The start and end points the user picked. null = not picked yet.
 const places = { from: null, to: null };
 
@@ -41,8 +44,13 @@ const markers = {
 
 // Ask our server for places matching the text, e.g. "santana row".
 async function searchPlaces(text) {
-  const response = await fetch("/api/search?q=" + encodeURIComponent(text));
-  return await response.json();
+  try {
+    const response = await fetch("/api/search?q=" + encodeURIComponent(text));
+    if (!response.ok) return [];
+    return await response.json();
+  } catch (error) {
+    return []; // offline or server down: just show no suggestions
+  }
 }
 
 // Save a picked place: remember it, fill the box, drop a pin, move the map.
@@ -74,6 +82,8 @@ function setUpSearchBox(which) {
     // Wait until they stop typing for 0.3 seconds, so we don't search on every key.
     typingTimer = setTimeout(async () => {
       const results = await searchPlaces(text);
+      // If the user kept typing while we waited, these results are old. Ignore them.
+      if (input.value.trim() !== text) return;
       list.innerHTML = "";
       for (const place of results) {
         const item = document.createElement("li");
@@ -185,6 +195,7 @@ async function findRoute() {
     showStatus("");
     lastPreferences = data.preferences;
     currentRoutes = data.routes;
+    await mapReady; // make sure the map can draw before we add routes to it
     showResults(data);
     selectRoute(0); // the best route comes first
 
@@ -210,6 +221,14 @@ async function findRoute() {
 }
 
 document.getElementById("go").addEventListener("click", findRoute);
+
+// Press Enter in the instructions box to search (Shift+Enter still makes a new line).
+document.getElementById("instructions").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    if (!document.getElementById("go").disabled) findRoute();
+  }
+});
 
 
 // ============ 4. SHOWING THE RESULTS ============

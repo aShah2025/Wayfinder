@@ -11,14 +11,11 @@ what the rider asks for.
 """
 import os
 
-import httpx
+from backend.web import ServiceUnavailable, request_json
 
 # The public Valhalla server. It's free for light use; the URL can be changed
 # in .env if we ever run our own copy.
 VALHALLA_URL = os.getenv("VALHALLA_URL", "https://valhalla1.openstreetmap.de")
-
-# Some servers ask apps to identify themselves politely.
-HEADERS = {"User-Agent": "Wayfinder (ImpactHack student project)"}
 
 # Default bike settings: a normal rider on a normal bike.
 # use_hills / use_roads go from 0.0 (avoid as much as possible) to 1.0 (don't care).
@@ -33,6 +30,27 @@ DEFAULT_SETTINGS = {
 
 class RouteError(Exception):
     """Raised when Valhalla can't find a route (e.g. a point is in the ocean)."""
+
+
+async def call_valhalla(endpoint, request_body):
+    """Send a request to Valhalla (with automatic retries). Returns (status, data)."""
+    try:
+        return await request_json("POST", f"{VALHALLA_URL}/{endpoint}",
+                                  json=request_body, timeout=30)
+    except ServiceUnavailable:
+        raise RouteError("The free routing server is busy right now. "
+                         "Please try again in a few seconds.")
+
+
+def friendly_error(valhalla_message):
+    """Turn Valhalla's technical error messages into something a rider understands."""
+    message = valhalla_message.lower()
+    if "distance" in message and ("exceed" in message or "limit" in message):
+        return "That trip is too long. Wayfinder plans bike rides up to about 90 miles."
+    if "no suitable edges" in message or "no path could be found" in message \
+            or "locations are disconnected" in message:
+        return "Couldn't find a bike route there. One of the points may not be near a road."
+    return "Couldn't find a bike route: " + (valhalla_message or "unknown error")
 
 
 def decode_polyline(encoded, precision=6):
@@ -98,14 +116,9 @@ async def get_bike_route(start, end, settings=None, avoid_points=None, stop=None
             {"lon": lon, "lat": lat} for lon, lat in avoid_points
         ]
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{VALHALLA_URL}/route", json=request_body, headers=HEADERS
-        )
-
-    data = response.json()
-    if response.status_code != 200:
-        raise RouteError(data.get("error", "Couldn't find a bike route."))
+    status, data = await call_valhalla("route", request_body)
+    if status != 200:
+        raise RouteError(friendly_error(data.get("error", "")))
 
     trip = data["trip"]
 
@@ -155,12 +168,8 @@ async def get_road_details(geometry):
             ],
         },
     }
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{VALHALLA_URL}/trace_attributes", json=request_body, headers=HEADERS
-        )
-    data = response.json()
-    if response.status_code != 200:
-        raise RouteError(data.get("error", "Couldn't read road details."))
+    status, data = await call_valhalla("trace_attributes", request_body)
+    if status != 200:
+        raise RouteError("Couldn't read road details: " + data.get("error", "unknown error"))
 
     return {"edges": data["edges"], "shape": decode_polyline(data["shape"])}
