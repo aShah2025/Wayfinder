@@ -25,8 +25,9 @@ def health():
 
 # Search for places as the user types, e.g. /api/search?q=santana row
 @app.get("/api/search")
-async def search(q: str):
-    return await search_places(q)
+async def search(q: str, lat: float | None = None, lon: float | None = None):
+    near = {"lat": lat, "lon": lon} if lat is not None and lon is not None else None
+    return await search_places(q[:200], near=near)
 
 
 # These classes describe what the website must send us.

@@ -27,14 +27,34 @@ def make_label(props):
     return ", ".join(label)
 
 
-async def search_places(query, limit=5):
-    """Return up to `limit` places matching the text, each with a label + coordinates."""
+def make_address(props):
+    """The gray second line of a suggestion, like '1 Washington Square, San Jose'."""
+    street = " ".join(p for p in [props.get("housenumber"), props.get("street")] if p)
+    parts = [street, props.get("district") or props.get("locality"), props.get("city")]
+    address = []
+    for part in parts:
+        if part and part not in address and part != props.get("name"):
+            address.append(part)
+    return ", ".join(address)
+
+
+NEARBY_KM = 75  # results closer than this to the map's center are shown first
+
+
+async def search_places(query, limit=5, near=None):
+    """
+    Return up to `limit` places matching the text, each with a label + coordinates.
+    `near` = {"lat", "lon"} of where the rider is looking (defaults to San Jose).
+    """
+    from backend.stops import distance_km  # (imported here to avoid a circular import)
+
+    near = near or SAN_JOSE
     params = {
         "q": query,
-        "limit": limit,
+        "limit": limit + 3,  # ask for a few extra, since we drop repeats
         "bbox": CALIFORNIA_BOX,
-        "lat": SAN_JOSE["lat"],
-        "lon": SAN_JOSE["lon"],
+        "lat": near["lat"],
+        "lon": near["lon"],
         "lang": "en",
     }
     try:
@@ -54,5 +74,16 @@ async def search_places(query, limit=5):
         seen_labels.add(label)
 
         lon, lat = coordinates
-        results.append({"label": label, "lat": lat, "lon": lon})
-    return results
+        props = feature.get("properties", {})
+        results.append({
+            "label": label,
+            "name": props.get("name") or label.split(",")[0],
+            "address": make_address(props),
+            "lat": lat,
+            "lon": lon,
+        })
+
+    # Keep the search engine's order, but move far-away matches (like a same-named
+    # place 100 miles away) below the nearby ones.
+    results.sort(key=lambda place: distance_km(near, place) > NEARBY_KM)
+    return results[:limit]

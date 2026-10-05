@@ -12,8 +12,10 @@ import asyncio
 
 from backend.ai_parser import (DEFAULT_PREFERENCES, AIUnavailable, parse_instructions,
                                 to_valhalla_settings)
-from backend.routing import DEFAULT_SETTINGS, RouteError, get_bike_route, get_road_details
-from backend.scoring import explain_choice, find_unmet_requests, measure_route, score_route
+from backend.routing import (DEFAULT_SETTINGS, RouteError, get_bike_route, get_local_pool,
+                             get_road_details)
+from backend.scoring import (explain_choice, explain_not_fastest, find_unmet_requests,
+                             measure_route, score_breakdown, score_route)
 from backend.stops import distance_km, find_stop
 
 MAX_REROUTES = 3        # how many times we try to steer around an avoided street
@@ -60,6 +62,28 @@ async def build_candidate(name, description, start, end, stop, settings, avoid_s
     return route
 
 
+def describe_route(route, routes, best):
+    """A clear name for a route card, based on what the route actually is."""
+    if route is best and route["name"] == "Standard":
+        return "Best match for you", "Same as the typical route: it already fits your request"
+    if route is best:
+        return "Best match for you", "Lowest score for what you asked for"
+    if route["name"] == "Standard":
+        return "Typical route", "What a regular map app would give you, for comparison"
+
+    # Otherwise, name it after what it does best among all the options.
+    m = route["metrics"]
+    if route["duration_minutes"] == min(r["duration_minutes"] for r in routes):
+        return "Fastest", "Quickest option"
+    if m["busy_road_miles"] == min(r["metrics"]["busy_road_miles"] for r in routes):
+        return "Calmest", "Fewest miles on busy roads"
+    if m["climb_ft"] == min(r["metrics"]["climb_ft"] for r in routes):
+        return "Flattest", "Least climbing"
+    if m["bike_lane_miles"] == max(r["metrics"]["bike_lane_miles"] for r in routes):
+        return "Most bike lanes", "Most miles on bike lanes and paths"
+    return "Alternative", "Another option built from your request"
+
+
 async def plan_ride(start, end, instructions, previous_prefs=None):
     # Quick sanity checks before doing any slow work.
     straight_line = distance_km(start, end)
@@ -100,7 +124,7 @@ async def plan_ride(start, end, instructions, previous_prefs=None):
         "use_roads": push_further(ai_settings["use_roads"]),
     }
 
-    # Step 2 + 3: three candidates, built at the same time to save waiting.
+    # Step 2 + 3: candidate routes, built at the same time to save waiting.
     # "Standard" is what an ordinary map app would give: our baseline to compare against.
     jobs = [
         build_candidate("Standard", "A typical bike route, ignoring your request",
@@ -110,6 +134,15 @@ async def plan_ride(start, end, instructions, previous_prefs=None):
         build_candidate("Extra tailored", "Your instructions, taken even further",
                         start, end, stop, stronger_settings, prefs.avoid_streets),
     ]
+    # With our OWN routing engine, extra routes cost milliseconds, so explore more
+    # strategies (the extremes of Valhalla's dials) and let the scoring pick.
+    # On the free public server we stick to 3, to stay within its limits.
+    if get_local_pool():
+        for use_roads, use_hills in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]:
+            jobs.append(build_candidate(
+                "Explore", "Another strategy", start, end, stop,
+                {**ai_settings, "use_roads": use_roads, "use_hills": use_hills},
+                prefs.avoid_streets))
     results = await asyncio.gather(*jobs, return_exceptions=True)
     for result in results:
         if isinstance(result, Exception):
@@ -119,15 +152,23 @@ async def plan_ride(start, end, instructions, previous_prefs=None):
         first_error = results[0]
         raise first_error if isinstance(first_error, RouteError) else RouteError(str(first_error))
 
-    # Different settings sometimes produce the exact same path. Keep only one copy.
+    # Different settings sometimes produce the same path (sometimes with tiny coordinate
+    # differences). Treat routes with the same length, time, climb, and traffic as one.
+    def fingerprint(route):
+        m = route["metrics"]
+        return (route["duration_minutes"], round(route["distance_miles"], 1),
+                m["climb_ft"], round(m["busy_road_miles"], 1), m["bike_lane_percent"])
+
     unique = []
     for route in candidates:
-        if all(route["geometry"] != other["geometry"] for other in unique):
+        if all(fingerprint(route) != fingerprint(other) for other in unique):
             unique.append(route)
 
     # Step 4: score every candidate with the rider's preferences.
     for route in unique:
         route["score"] = score_route(route, route["metrics"], prefs)
+        route["score_parts"] = {part: round(value, 1) for part, value
+                                in score_breakdown(route, route["metrics"], prefs).items()}
 
     # Step 5: lowest score wins. Explain it by comparing with the standard route.
     best = min(unique, key=lambda r: r["score"])
@@ -136,7 +177,11 @@ async def plan_ride(start, end, instructions, previous_prefs=None):
         explanation = explain_choice(best, standard, prefs)
     else:
         explanation = ["Couldn't build a standard route to compare against this time."]
-    warnings = find_unmet_requests(best, prefs)  # be honest about what we couldn't do
+    fastest = min(unique, key=lambda r: r["duration_minutes"])
+    not_fastest = explain_not_fastest(best, fastest, prefs)
+    if not_fastest:
+        explanation.append(not_fastest)
+    warnings = find_unmet_requests(best, prefs, unique)  # be honest about what we couldn't do
     if ai_warning:
         warnings.insert(0, ai_warning)
     if stop:
@@ -144,13 +189,26 @@ async def plan_ride(start, end, instructions, previous_prefs=None):
     elif prefs.stop_type != "none":
         explanation.insert(0, f"Couldn't find a {prefs.stop_type.replace('_', ' ')} stop near your route")
 
-    # Tidy up what we send to the website.
-    routes = []
+    # Tidy up what we send to the website, and give each route a clear name.
     for route in unique:
         route["metrics"].pop("avoided_street_points", None)
         route["is_best"] = route is best
-        routes.append(route)
-    routes.sort(key=lambda r: r["score"])  # best first
+        route["is_typical"] = route["name"] == "Standard"
+        route["label"], route["description"] = describe_route(route, unique, best)
+
+    # Show at most 4 options: the best, the typical route (for comparison), and up to
+    # two others that each stand out for something (Fastest, Calmest, Flattest...).
+    routes = [best]
+    typical = next((r for r in unique if r["is_typical"] and r is not best), None)
+    if typical:
+        routes.append(typical)
+    for route in sorted(unique, key=lambda r: r["score"]):
+        if len(routes) >= 4:
+            break
+        if route in routes or route["label"] == "Alternative":
+            continue
+        if route["label"] not in [r["label"] for r in routes]:
+            routes.append(route)
 
     return {
         "understood": prefs.understood,

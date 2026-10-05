@@ -100,7 +100,9 @@ Guidelines:
   speed_importance 0.5, Hybrid bike, 10 mph) and only move a value when the request gives
   a reason to.
 - Some values can go NEGATIVE, meaning the rider wants the opposite:
-  "avoid bike lanes", "no bike paths", "just regular roads" -> prefer_bike_lanes -0.7 to -1.0.
+  "avoid bike lanes", "no bike paths", "just regular roads" -> prefer_bike_lanes -0.7 to -1.0,
+  and (unless they ALSO ask for quiet streets) lower avoid_busy_roads to about 0.2, since
+  they're choosing to ride with traffic.
   "I want hills", "hilly workout", "training climbs" -> avoid_hills -0.5 to -1.0.
 - Riding with kids, beginners, nervous riders, or "safest route" -> raise avoid_busy_roads
   and prefer_bike_lanes, lower speed_mph.

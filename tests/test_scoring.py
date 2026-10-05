@@ -170,7 +170,7 @@ def test_explanation_uses_real_numbers():
     reasons = explain_choice(best, standard, prefs)
     assert "200 ft less climbing" in reasons
     assert "1.5 fewer miles on busy roads" in reasons
-    assert "Tradeoff: 3 extra min compared to the standard route" in reasons
+    assert "Tradeoff: 3 extra min compared to the typical route" in reasons
 
 
 # ---------- avoiding bike lanes (the bug a user found) ----------
@@ -198,8 +198,8 @@ def test_explanation_credits_fewer_bike_lanes_when_asked():
     standard = fake_route(30, bike=3.43, busy=2.85)
     best = fake_route(31, bike=1.6, busy=3.42)
     reasons = explain_choice(best, standard, prefs)
-    assert "1.83 fewer miles on bike lanes, as you asked" in reasons
-    assert "Tradeoff: 0.57 more miles on busy roads" in reasons
+    assert "1.8 fewer miles on bike lanes, as you asked" in reasons
+    assert "Tradeoff: 0.6 more miles on busy roads" in reasons
 
 
 def test_warns_when_bike_lanes_could_not_be_avoided():
@@ -215,3 +215,58 @@ def test_no_warnings_when_request_was_met():
     best = fake_route(25)
     best["metrics"]["bike_lane_percent"] = 5
     assert find_unmet_requests(best, prefs) == []
+
+
+# ---------- explaining choices (added after the judge-style review) ----------
+
+def test_why_not_fastest_explains_the_tradeoff():
+    from backend.scoring import explain_not_fastest
+    best = fake_route(45, busy=0.5)
+    fastest = fake_route(43, busy=1.8)
+    line = explain_not_fastest(best, fastest, prefs_with())
+    assert "saves 2 min, but it has 1.3 more miles on busy roads" in line
+
+
+def test_why_not_fastest_is_silent_when_best_is_fastest():
+    from backend.scoring import explain_not_fastest
+    best = fake_route(30)
+    assert explain_not_fastest(best, best, prefs_with()) is None
+
+
+def test_fastest_possible_really_picks_the_fastest():
+    # Bug found in testing: "fastest possible, I'm late" chose a route 5 min slower,
+    # because busy-road penalties outweighed the time saved.
+    prefs = prefs_with(speed_importance=1.0, avoid_busy_roads=0.5, prefer_bike_lanes=0.3)
+    calm = fake_route(32, busy=1.29, bike=3.0)
+    fast = fake_route(27, busy=3.42, bike=1.6)
+    assert score_route(fast, fast["metrics"], prefs) < score_route(calm, calm["metrics"], prefs)
+
+
+def test_warning_does_not_claim_lowest_when_another_option_is_lower():
+    prefs = prefs_with(prefer_bike_lanes=-1.0)
+    best = fake_route(37)
+    best["metrics"]["bike_lane_percent"] = 54
+    other = fake_route(32)
+    other["metrics"]["bike_lane_percent"] = 32
+    warning = find_unmet_requests(best, prefs, [best, other])[0]
+    assert "lowest of the options" not in warning
+
+
+def test_score_breakdown_adds_up_to_the_score():
+    from backend.scoring import score_breakdown
+    prefs = prefs_with(avoid_hills=0.8, avoid_busy_roads=0.9, prefer_bike_lanes=0.5)
+    route = fake_route(30, climb=120, busy=1.2, bike=2.0)
+    parts = score_breakdown(route, route["metrics"], prefs)
+    assert round(sum(parts.values()), 1) == score_route(route, route["metrics"], prefs)
+    assert parts["bike_lanes"] < 0  # liking bike lanes is a bonus
+
+
+def test_route_names_describe_the_route():
+    from backend.planner import describe_route
+    standard = {**fake_route(25, busy=2.0), "name": "Standard"}
+    calm = {**fake_route(28, busy=0.5), "name": "Tailored"}
+    quick = {**fake_route(24, busy=2.5), "name": "Extra tailored"}
+    routes = [standard, calm, quick]
+    assert describe_route(calm, routes, best=calm)[0] == "Best match for you"
+    assert describe_route(standard, routes, best=calm)[0] == "Typical route"
+    assert describe_route(quick, routes, best=calm)[0] == "Fastest"
