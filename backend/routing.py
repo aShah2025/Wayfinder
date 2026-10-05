@@ -77,6 +77,10 @@ class RouteError(Exception):
     """Raised when Valhalla can't find a route (e.g. a point is in the ocean)."""
 
 
+class RoutingServiceDown(RouteError):
+    """Raised when the routing server can't be reached at all."""
+
+
 # Remember Valhalla's answers, so the exact same request (like re-running a demo
 # trip) comes back instantly and doesn't load the free public server.
 _valhalla_cache = {}
@@ -96,8 +100,8 @@ async def call_valhalla(endpoint, request_body):
         answer = await request_json("POST", f"{VALHALLA_URL}/{endpoint}",
                                     json=request_body, timeout=15)
     except ServiceUnavailable:
-        raise RouteError("The free routing server is busy right now. "
-                         "Please try again in a few seconds.")
+        raise RoutingServiceDown("Couldn't reach the routing server. "
+                                 "Please try again in a minute.")
     if len(_valhalla_cache) < 1000:
         _valhalla_cache[cache_key] = answer
     return answer

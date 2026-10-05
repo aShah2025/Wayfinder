@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from backend.ai_parser import AIUnavailable, RidePreferences
 from backend.geocode import search_places
 from backend.planner import plan_ride
-from backend.routing import RouteError
+from backend.routing import RouteError, RoutingServiceDown
 
 app = FastAPI()
 
@@ -62,6 +62,8 @@ async def route(request: RouteRequest):
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="The free map servers are slow right now. "
                             "Please try again in a moment.")
+    except RoutingServiceDown as error:
+        raise HTTPException(status_code=503, detail=str(error))
     except RouteError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except AIUnavailable as error:

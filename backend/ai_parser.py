@@ -9,6 +9,7 @@ The AI never picks the route. It only translates human words into settings.
 Our own code (planner.py + scoring.py) uses those settings to find, measure,
 and choose the route.
 """
+import asyncio
 import json
 import os
 from typing import Literal
@@ -179,7 +180,8 @@ async def parse_instructions(text, previous=None):
     prefs = None
     for model in MODELS:
         try:
-            response = await client.aio.models.generate_content(
+            # A hard 12-second limit per model, so a stuck connection can't hang the app.
+            response = await asyncio.wait_for(client.aio.models.generate_content(
                 model=model,
                 contents=prompt,
                 config={
@@ -187,12 +189,12 @@ async def parse_instructions(text, previous=None):
                     "response_schema": RidePreferences,  # forces Gemini to fill in our exact form
                     "automatic_function_calling": {"disable": True},
                 },
-            )
+            ), timeout=12)
             prefs = response.parsed
             if prefs:
                 break
         except Exception as error:
-            print(f"[ai_parser] {model} failed: {str(error)[:100]}")
+            print(f"[ai_parser] {model} failed: {type(error).__name__} {str(error)[:100]}")
 
     if prefs is None:
         raise AIUnavailable("The AI is busy right now. Please try again in a moment.")
@@ -215,11 +217,16 @@ def to_valhalla_settings(prefs):
     # Blend both preferences into the one dial: avoiding traffic turns it down,
     # wanting bike lanes turns it down more, AVOIDING bike lanes (negative) turns it up.
     use_roads = clamp(1 - prefs.avoid_busy_roads - 0.4 * prefs.prefer_bike_lanes)
+    use_hills = clamp(1 - prefs.avoid_hills)
+    if prefs.speed_importance >= 0.7:
+        # In a hurry: direct roads and hills are fine, since detours cost time.
+        use_roads = max(use_roads, prefs.speed_importance * 0.8)
+        use_hills = max(use_hills, 0.5)
 
     return {
         "bicycle_type": prefs.bicycle_type,
         "cycling_speed": round(prefs.speed_mph * 1.609, 1),  # Valhalla wants km/h
-        "use_hills": round(clamp(1 - prefs.avoid_hills), 2),  # wanting hills (negative) -> 1.0
+        "use_hills": round(use_hills, 2),  # wanting hills (negative avoid_hills) -> 1.0
         "use_roads": round(use_roads, 2),
         "avoid_bad_surfaces": round(prefs.avoid_unpaved, 2),
     }

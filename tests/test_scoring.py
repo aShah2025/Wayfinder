@@ -270,3 +270,28 @@ def test_route_names_describe_the_route():
     assert describe_route(calm, routes, best=calm)[0] == "Best match for you"
     assert describe_route(standard, routes, best=calm)[0] == "Typical route"
     assert describe_route(quick, routes, best=calm)[0] == "Fastest"
+
+
+# ---------- found by the stress-test agent ----------
+
+def test_highway_names_match_their_openstreetmap_names():
+    assert is_avoided_street(["CA 1", "Cabrillo Highway South"], ["Highway 1"])
+    assert is_avoided_street(["US 101"], ["Hwy 101"])
+    assert is_avoided_street(["I-280"], ["Interstate 280"])
+    assert not is_avoided_street(["CA 17"], ["Highway 1"])
+    assert not is_avoided_street(["US 101"], ["Highway 1"])
+
+
+def test_flattest_rider_avoids_a_20_percent_wall_even_with_a_bit_more_climbing():
+    # Berkeley case: 951 ft with a 20% wall vs 1102 ft topping out at 12%.
+    prefs = prefs_with(avoid_hills=1.0, speed_importance=0.3)
+    wall = fake_route(30, climb=951)
+    wall["metrics"]["steepest_grade"] = 20
+    gentle = fake_route(33, climb=1102)
+    gentle["metrics"]["steepest_grade"] = 12
+    assert score_route(gentle, gentle["metrics"], prefs) < score_route(wall, wall["metrics"], prefs)
+
+
+def test_hurry_turns_valhalla_toward_direct_roads():
+    rushed = to_valhalla_settings(prefs_with(speed_importance=1.0, avoid_busy_roads=0.5))
+    assert rushed["use_roads"] >= 0.8

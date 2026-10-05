@@ -10,7 +10,7 @@ planner.py: the step-by-step recipe for planning a ride.
 """
 import asyncio
 
-from backend.ai_parser import (DEFAULT_PREFERENCES, AIUnavailable, parse_instructions,
+from backend.ai_parser import (DEFAULT_PREFERENCES, AIUnavailable, make_safe, parse_instructions,
                                 to_valhalla_settings)
 from backend.routing import (DEFAULT_SETTINGS, RouteError, get_bike_route, get_local_pool,
                              get_road_details)
@@ -62,6 +62,28 @@ async def build_candidate(name, description, start, end, stop, settings, avoid_s
     return route
 
 
+# A rough outline of California as [longitude, latitude] corners (generous on the ocean
+# side). Its eastern border is diagonal, so a simple rectangle would wrongly include Reno.
+CALIFORNIA_OUTLINE = [
+    (-124.9, 42.0), (-120.0, 42.0), (-120.0, 39.0), (-114.6, 35.0), (-114.1, 34.3),
+    (-114.7, 32.7), (-117.2, 32.45), (-118.5, 32.6), (-121.5, 34.0), (-125.0, 40.0),
+]
+
+
+def in_california(point):
+    """Is this point inside the outline? (The classic "ray casting" test: draw a line
+    to the right of the point and count how many edges of the outline it crosses.
+    An odd number of crossings means the point is inside.)"""
+    x, y = point["lon"], point["lat"]
+    inside = False
+    for i in range(len(CALIFORNIA_OUTLINE)):
+        x1, y1 = CALIFORNIA_OUTLINE[i]
+        x2, y2 = CALIFORNIA_OUTLINE[(i + 1) % len(CALIFORNIA_OUTLINE)]
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
 def describe_route(route, routes, best):
     """A clear name for a route card, based on what the route actually is."""
     if route is best and route["name"] == "Standard":
@@ -86,6 +108,9 @@ def describe_route(route, routes, best):
 
 async def plan_ride(start, end, instructions, previous_prefs=None):
     # Quick sanity checks before doing any slow work.
+    for point in (start, end):
+        if not in_california(point):
+            raise RouteError("Wayfinder covers California. Please pick places in California.")
     straight_line = distance_km(start, end)
     if straight_line < 0.05:
         raise RouteError("Your start and destination are the same place.")
@@ -98,7 +123,7 @@ async def plan_ride(start, end, instructions, previous_prefs=None):
     try:
         prefs = await parse_instructions(instructions, previous_prefs)
     except AIUnavailable:
-        prefs = (previous_prefs or DEFAULT_PREFERENCES).model_copy(
+        prefs = make_safe(previous_prefs or DEFAULT_PREFERENCES).model_copy(
             update={"understood": "The AI is busy, so this route uses "
                     + ("your previous settings." if previous_prefs else "normal settings.")})
         ai_warning = ("Couldn't reach the AI to read your instructions. "

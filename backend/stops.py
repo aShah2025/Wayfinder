@@ -76,8 +76,8 @@ async def find_stop(start, end, stop_type):
             continue
 
         place = {"lat": point["lat"], "lon": point["lon"]}
-        if distance_km(start, place) < 0.3:
-            continue  # right next to the start isn't really "on the way"
+        if distance_km(start, place) < 0.3 or distance_km(place, end) < 0.3:
+            continue  # right next to the start or the end isn't really "on the way"
         extra = detour_km(start, place, end)
         if best is None or extra < best["detour_km"]:
             best = {

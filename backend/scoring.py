@@ -10,6 +10,8 @@ scoring.py: Wayfinder's own judgment. No AI in this file.
    make anything up.
 """
 
+import re
+
 KM_TO_MILES = 0.621371
 METERS_TO_FEET = 3.28084
 
@@ -22,9 +24,14 @@ BIKE_PATH_USES = {"cycleway", "path", "mountain_bike", "living_street"}
 BIKE_LANE_TYPES = {"dedicated", "separated"}  # painted bike lane or protected bike lane
 
 
+HIGHWAY_WORDS = r"(?:highway|hwy|state route|state highway|route|sr|ca|us|interstate|i)"
+
+
 def simplify_name(name):
     """'Capitol Expressway' and 'capitol expy' should match, so normalize names."""
     name = name.lower().replace(".", "")
+    # "Highway 1", "CA 1", "SR-1", "US 101", "I-280" all become "rt 1", "rt 101"...
+    name = re.sub(rf"\b{HIGHWAY_WORDS}[\s-]*(\d+)\b", r"rt \1", name)
     short_forms = {
         "expressway": "expy", "avenue": "ave", "street": "st", "boulevard": "blvd",
         "road": "rd", "drive": "dr", "lane": "ln", "parkway": "pkwy", "highway": "hwy",
@@ -133,9 +140,10 @@ def score_breakdown(route, metrics, prefs):
         # Real riding time (counts more if the rider is in a hurry).
         "time": route["duration_minutes"] * (0.5 + 1.5 * prefs.speed_importance),
         # Hills: if you hate them, every 8 ft of climbing feels like an extra minute,
-        # and very steep pieces (over 5%) are extra painful.
+        # and very steep pieces are extra painful: 8 minutes per % over 5%
+        # (a 20% wall on a cargo bike can mean getting off and pushing).
         "hills": comfort * prefs.avoid_hills * (metrics["climb_ft"] / 8
-                                                + max(0, metrics["steepest_grade"] - 5) * 4),
+                                                + max(0, metrics["steepest_grade"] - 5) * 8),
         # Busy roads: up to 15 penalty minutes per mile.
         "traffic": comfort * prefs.avoid_busy_roads * metrics["busy_road_miles"] * 15,
         # Bike lanes: up to 5 minutes off per mile if you like them (negative = bonus),
@@ -265,6 +273,8 @@ def explain_not_fastest(best, fastest, prefs):
         costs.append("uses a street you asked to avoid")
     if f["busy_road_miles"] - b["busy_road_miles"] >= 0.1:
         costs.append(f"has {f['busy_road_miles'] - b['busy_road_miles']:.1f} more miles on busy roads")
+    if prefs.avoid_hills >= 0.5 and f["steepest_grade"] - b["steepest_grade"] >= 2:
+        costs.append(f"has a {f['steepest_grade']}% hill (this one tops out at {b['steepest_grade']}%)")
     if prefs.avoid_hills > 0 and f["climb_ft"] - b["climb_ft"] >= 10:
         costs.append(f"has {f['climb_ft'] - b['climb_ft']} ft more climbing")
     if prefs.prefer_bike_lanes > 0 and b["bike_lane_miles"] - f["bike_lane_miles"] >= 0.1:
