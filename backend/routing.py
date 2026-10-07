@@ -9,16 +9,58 @@ how much to avoid busy roads...) and it finds the best path for those settings.
 The settings are the important part: later, the AI will choose them based on
 what the rider asks for.
 """
+import asyncio
+import json
 import os
+from pathlib import Path
 
-import httpx
+from backend.web import ServiceUnavailable, request_json
 
-# The public Valhalla server. It's free for light use; the URL can be changed
-# in .env if we ever run our own copy.
+# The public Valhalla server, used only if we don't have our own copy (see below).
 VALHALLA_URL = os.getenv("VALHALLA_URL", "https://valhalla1.openstreetmap.de")
 
-# Some servers ask apps to identify themselves politely.
-HEADERS = {"User-Agent": "Wayfinder (ImpactHack student project)"}
+# OUR OWN copy of Valhalla, running inside this Python program with California's
+# map + elevation data (built by scripts/build_valhalla.sh). It's much faster than
+# the public server and can't be rate-limited or go down during a demo.
+LOCAL_CONFIG = Path(__file__).parent.parent / "valhalla_data" / "valhalla.json"
+LOCAL_ENGINES = 3  # a few copies, so the 3 candidate routes can be built at the same time
+_local_pool = None  # created the first time it's needed
+
+
+def get_local_pool():
+    """Return a queue of local Valhalla engines, or None if we don't have the data."""
+    global _local_pool
+    if _local_pool is None:
+        _local_pool = False
+        tiles = LOCAL_CONFIG.parent / "tiles"
+        if LOCAL_CONFIG.exists() and tiles.exists() and any(tiles.iterdir()):
+            try:
+                import valhalla  # the pyvalhalla package
+                pool = asyncio.Queue()
+                for _ in range(LOCAL_ENGINES):
+                    pool.put_nowait(valhalla.Actor(str(LOCAL_CONFIG)))
+                _local_pool = pool
+                print("[routing] using the LOCAL Valhalla engine with California data")
+            except Exception as error:
+                print(f"[routing] local Valhalla unavailable ({error}); using the public server")
+    return _local_pool or None
+
+
+async def call_local_valhalla(pool, endpoint, request_body):
+    """Run a request on one of our local engines (in a background thread)."""
+    engine = await pool.get()
+    try:
+        answer = await asyncio.to_thread(getattr(engine, endpoint), json.dumps(request_body))
+        return 200, json.loads(answer)
+    except Exception as error:
+        # Valhalla reports problems (like "no path found") as an error with a JSON message.
+        try:
+            details = json.loads(str(error))
+            return 400, {"error": details.get("error", str(error))}
+        except ValueError:
+            return 400, {"error": str(error)}
+    finally:
+        pool.put_nowait(engine)
 
 # Default bike settings: a normal rider on a normal bike.
 # use_hills / use_roads go from 0.0 (avoid as much as possible) to 1.0 (don't care).
@@ -33,6 +75,47 @@ DEFAULT_SETTINGS = {
 
 class RouteError(Exception):
     """Raised when Valhalla can't find a route (e.g. a point is in the ocean)."""
+
+
+class RoutingServiceDown(RouteError):
+    """Raised when the routing server can't be reached at all."""
+
+
+# Remember Valhalla's answers, so the exact same request (like re-running a demo
+# trip) comes back instantly and doesn't load the free public server.
+_valhalla_cache = {}
+
+
+async def call_valhalla(endpoint, request_body):
+    """Send a request to Valhalla (with automatic retries). Returns (status, data)."""
+    cache_key = endpoint + json.dumps(request_body, sort_keys=True)
+    if cache_key in _valhalla_cache:
+        return _valhalla_cache[cache_key]
+
+    pool = get_local_pool()
+    if pool:
+        return await call_local_valhalla(pool, endpoint, request_body)
+
+    try:
+        answer = await request_json("POST", f"{VALHALLA_URL}/{endpoint}",
+                                    json=request_body, timeout=15)
+    except ServiceUnavailable:
+        raise RoutingServiceDown("Couldn't reach the routing server. "
+                                 "Please try again in a minute.")
+    if len(_valhalla_cache) < 1000:
+        _valhalla_cache[cache_key] = answer
+    return answer
+
+
+def friendly_error(valhalla_message):
+    """Turn Valhalla's technical error messages into something a rider understands."""
+    message = valhalla_message.lower()
+    if "distance" in message and ("exceed" in message or "limit" in message):
+        return "That trip is too long. Wayfinder plans bike rides up to about 90 miles."
+    if "no suitable edges" in message or "no path could be found" in message \
+            or "locations are disconnected" in message:
+        return "Couldn't find a bike route there. One of the points may not be near a road."
+    return "Couldn't find a bike route: " + (valhalla_message or "unknown error")
 
 
 def decode_polyline(encoded, precision=6):
@@ -98,14 +181,9 @@ async def get_bike_route(start, end, settings=None, avoid_points=None, stop=None
             {"lon": lon, "lat": lat} for lon, lat in avoid_points
         ]
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{VALHALLA_URL}/route", json=request_body, headers=HEADERS
-        )
-
-    data = response.json()
-    if response.status_code != 200:
-        raise RouteError(data.get("error", "Couldn't find a bike route."))
+    status, data = await call_valhalla("route", request_body)
+    if status != 200:
+        raise RouteError(friendly_error(data.get("error", "")))
 
     trip = data["trip"]
 
@@ -149,18 +227,14 @@ async def get_road_details(geometry):
             "action": "include",
             "attributes": [
                 "edge.length", "edge.names", "edge.road_class", "edge.use",
-                "edge.cycle_lane", "edge.speed", "edge.mean_elevation",
+                "edge.cycle_lane", "edge.speed_limit", "edge.mean_elevation",
                 "edge.max_upward_grade", "edge.begin_shape_index",
                 "edge.end_shape_index", "shape",
             ],
         },
     }
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{VALHALLA_URL}/trace_attributes", json=request_body, headers=HEADERS
-        )
-    data = response.json()
-    if response.status_code != 200:
-        raise RouteError(data.get("error", "Couldn't read road details."))
+    status, data = await call_valhalla("trace_attributes", request_body)
+    if status != 200:
+        raise RouteError("Couldn't read road details: " + data.get("error", "unknown error"))
 
     return {"edges": data["edges"], "shape": decode_polyline(data["shape"])}

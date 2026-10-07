@@ -3,7 +3,9 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wayfinder</title>
+    <title>Wayfinder: bike routes that listen</title>
+    <meta name="description" content="Tell Wayfinder how you want to ride, like 'avoid hills, I'm with my kid', and it builds, measures, and compares real bike routes across California.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚲</text></svg>">
 
     <!-- MapLibre: free library that draws the interactive map -->
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
@@ -15,36 +17,49 @@
     <!-- The map fills the whole screen behind everything -->
     <div id="map"></div>
 
+    <!-- Map tool buttons (3D view, ride preview) — wired up in three_d.js -->
+    <div id="map-tools"></div>
+
     <!-- The floating panel on the left, like Google Maps -->
-    <div id="panel">
+    <main id="panel">
       <h1>🚲 Wayfinder</h1>
       <p class="tagline">Bike routes that actually listen to you.</p>
+
+      <!-- One-click examples (filled in by app.js) -->
+      <div id="examples" aria-label="Try an example"><span class="examples-label">Try one:</span></div>
 
       <!-- Start and destination search boxes.
            Each has a hidden list underneath for search suggestions. -->
       <div class="search-box">
         <span class="dot start-dot"></span>
-        <input id="from" type="text" placeholder="Choose starting point" autocomplete="off">
-        <button id="my-location" type="button" title="Use my location">📍</button>
-        <ul class="suggestions" id="from-suggestions"></ul>
+        <input id="from" type="text" placeholder="Choose starting point" autocomplete="off"
+               aria-label="Starting point" role="combobox" aria-controls="from-suggestions">
+        <button id="my-location" type="button" title="Use my location"
+                aria-label="Use my current location as the start">📍</button>
+        <ul class="suggestions" id="from-suggestions" role="listbox"></ul>
       </div>
       <div class="search-box">
         <span class="dot end-dot"></span>
-        <input id="to" type="text" placeholder="Choose destination" autocomplete="off">
-        <ul class="suggestions" id="to-suggestions"></ul>
+        <input id="to" type="text" placeholder="Choose destination" autocomplete="off"
+               aria-label="Destination" role="combobox" aria-controls="to-suggestions">
+        <ul class="suggestions" id="to-suggestions" role="listbox"></ul>
       </div>
 
       <label for="instructions">How do you want to ride?</label>
       <textarea id="instructions" rows="3"
         placeholder="e.g. avoid big hills, I'm riding with my kid, stay off busy roads"></textarea>
 
+      <!-- "Keeping your riding style: ..." note when you change the trip -->
+      <div id="keeping"></div>
+
       <button id="go">Find my route</button>
 
       <!-- Filled in by app.js after a route is found -->
-      <div id="status"></div>
+      <div id="status" role="status" aria-live="polite"></div>
       <div id="results"></div>
-    </div>
+    </main>
 
     <script src="app.js"></script>
+    <script src="three_d.js"></script>
   </body>
 </html>

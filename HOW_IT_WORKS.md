@@ -79,7 +79,9 @@ Typical time: 3–8 seconds.
 6. Score, pick the lowest, and explain.
 
 ### `backend/routing.py`: talking to Valhalla
-- **Valhalla** is a free, open-source routing engine. We use the public server.
+- **Valhalla** is a free, open-source routing engine.
+- **We run our own copy, with all of California.** `scripts/build_valhalla.sh` downloads California's OpenStreetMap data (1.3 GB) and elevation data (121 tiles), then builds Valhalla's routing graph. Wayfinder runs that engine *inside* the Python server (the `pyvalhalla` package), so routing takes milliseconds, has no rate limits, and can't go down during a demo. If the local data isn't there, it automatically uses the free public Valhalla server instead.
+  - *Why:* while testing, the free public server blocked us for sending too many requests, and every ride failed. Owning the engine fixed that for good.
 - `get_bike_route()` sends start, (stop), end, and bike settings. It gets back distance, time, steps, and the route line.
 - **Encoded polyline:** Valhalla squeezes thousands of points into a short string to save space. `decode_polyline()` unpacks it. Each number is stored as the *difference* from the previous point, packed into 5-bit chunks written as letters.
 - `get_road_details()` asks Valhalla about **every road piece ("edge")** on a route: road type, bike lane, car speed, elevation, steepness. It uses `walk_or_snap` matching, which means it tries an exact match first and otherwise snaps the line to the nearest roads. That fixed a real bug where some routes failed.
@@ -104,6 +106,10 @@ score = riding time × (0.5 + speed_importance)
 ```
 In one sentence: *"Each route's score is its real time plus imaginary extra minutes for the things you dislike, and the AI's preferences decide how much each dislike costs."*
 
+**Showing the score** (`score_breakdown`): the score is split into parts (ride time, traffic, hills, bike lanes, banned street), and each route card shows a colored bar of those parts, like "Score 56 = 29 ride time + 26 traffic + 1 hills". This makes it visible that *Wayfinder's math* picks the route, not the AI.
+
+**"Why not the fastest?"** (`explain_not_fastest`): if the winner isn't the quickest option, the app says what the faster one would cost, e.g. "It saves 2 min, but has 1.3 more miles on busy roads."
+
 **Explaining** (`explain_choice`) compares the winner with the Standard route and writes reasons **only from measured numbers**, like "1.55 fewer miles on busy roads." It only praises changes in the direction the rider asked for, and it lists the costs too ("Tradeoff: 0.57 more miles on busy roads"). The AI never writes the explanation, so it can't make anything up.
 
 **Being honest** (`find_unmet_requests`): sometimes *no* route can do what you asked, for example if the only way there is a bike path. Instead of pretending, the app shows a **⚠️ Heads up**, like "Couldn't fully avoid bike lanes: 33% of this route still uses them."
@@ -115,8 +121,17 @@ In one sentence: *"Each route's score is its real time plus imaginary extra minu
 - Distances use the **haversine formula**, which gives the straight-line distance on a round Earth.
 - If Overpass fails, the ride still works. The stop is a bonus.
 
+### `backend/web.py`: calling outside services carefully
+- Every call to an outside service (public Valhalla, Photon, Overpass) goes through `request_json()`. If the service is slow, says "too many requests" (429), or has an error (5xx), it waits and **retries up to 3 times** instead of failing right away.
+- Answers are also **cached**: asking the exact same thing twice (like re-running a demo trip) is instant.
+
 ### `backend/geocode.py`: address search
 - Uses **Photon** to turn "Santana Row" into latitude/longitude, limited to a box around California and biased toward San Jose. Duplicate results are removed.
+
+### `frontend/three_d.js`: 3D view and ride preview
+- **🏔️ 3D button:** raises the map using real elevation data (free AWS Terrain Tiles), with exaggerated hills and 3D buildings, so you can *see* the climbs.
+- **▶ Preview ride:** the camera flies along your route like a drone following a rider, showing the elevation and grade as you go.
+- **Elevation chart ↔ map:** hover over the elevation chart and a dot shows exactly where that point is on the map.
 
 ### `frontend/index.html`, `style.css`, `app.js`
 - **HTML** = structure, **CSS** = looks, **JavaScript** = behavior.
@@ -125,7 +140,10 @@ In one sentence: *"Each route's score is its real time plus imaginary extra minu
 - `fetch("/api/route", ...)` sends the request. `await` means "wait for the answer before continuing."
 - The selected route is drawn in blue and the others in gray. Click either a card or a gray line to switch.
 - The elevation chart is a small **SVG** drawing generated from the profile points.
-- `lastPreferences` is kept so the next message becomes a **follow-up**.
+- `lastPreferences` is kept so the next message becomes a **follow-up**. If you change the start or destination, your riding style is kept (with a note you can dismiss), but trip-specific things like banned streets are dropped.
+- **One-click examples** ("🧒 Ride with my kid + coffee", "🚫 Stay off Capitol Expy", "⛰️ Flattest way through SF") fill in a real trip and run it.
+- If you type a place but don't pick a suggestion, the app asks you to pick, rather than guessing. Guessing once sent a test to the SJSU *Aviation Program* instead of the main campus.
+- **Accessibility:** keyboard navigation for suggestions and route cards, screen-reader labels, status messages announced to screen readers, and 16px inputs so phones don't zoom.
 
 ### `tests/`: automated tests
 - 24 tests check decoding, measuring, scoring, explanations, warnings, and stop picking with fake data. They need no internet or AI. Run them with `pytest`.

@@ -1,0 +1,6 @@
+# Libraries Vercel installs for the hosted version (a slimmer list than
+# backend/requirements.txt: no local routing engine, no test tools).
+fastapi==0.142.2
+httpx==0.28.1
+python-dotenv==1.2.4
+google-genai==2.26.0

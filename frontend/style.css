@@ -61,7 +61,7 @@ input, textarea {
   padding: 10px;
   border: 1px solid #dadce0;
   border-radius: 8px;
-  font-size: 15px;
+  font-size: 16px;           /* 16px+ stops iPhones from zooming in when you tap a box */
   font-family: inherit;
 }
 
@@ -113,8 +113,14 @@ input:focus, textarea:focus {
   font-size: 14px;
 }
 
-.suggestions li:hover {
-  background: #f1f3f4;
+.suggestions li:hover,
+.suggestions li.active {
+  background: #e8f0fe;
+}
+
+.suggestions li.no-results {
+  color: #5f6368;
+  cursor: default;
 }
 
 /* ---------- Button ---------- */
@@ -216,6 +222,7 @@ input:focus, textarea:focus {
 /* Route option cards */
 .route-card {
   border: 2px solid #dadce0;
+  border-left: 6px solid #dadce0;   /* app.js colors this to match the route's line */
   border-radius: 10px;
   padding: 10px 12px;
   cursor: pointer;
@@ -223,6 +230,13 @@ input:focus, textarea:focus {
 
 .route-card:hover {
   background: #f8f9fa;
+}
+
+.route-card:focus-visible,
+#go:focus-visible,
+#my-location:focus-visible {
+  outline: 3px solid #1a73e8;
+  outline-offset: 2px;
 }
 
 .route-card.selected {
@@ -329,11 +343,383 @@ input:focus, textarea:focus {
   font-size: 12px;
 }
 
+/* ---------- One-click examples ---------- */
+#examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.examples-label {
+  font-size: 13px;
+  color: #5f6368;
+}
+
+.example {
+  border: 1px solid #dadce0;
+  background: #f8f9fa;
+  border-radius: 16px;
+  padding: 5px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.example:hover {
+  background: #e8f0fe;
+  border-color: #c6dafc;
+}
+
+/* "Keeping your riding style" note */
+#panel.has-results #examples {
+  display: none;
+}
+
+#keeping:empty {
+  display: none;
+}
+
+#keeping {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #174ea6;
+  background: #e8f0fe;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.chip-x {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: #5f6368;
+  margin-left: auto;
+}
+
+/* Two-line search suggestions: name, then gray address */
+.suggestion-name {
+  display: block;
+  font-weight: 600;
+}
+
+.suggestion-address {
+  display: block;
+  font-size: 12px;
+  color: #5f6368;
+}
+
+/* The chat + what the AI understood */
+.chat-you {
+  font-size: 13px;
+  color: #3c4043;
+  background: white;
+  border-radius: 8px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  align-self: flex-end;
+}
+
+.tag.changed {
+  border-color: #f9ab00;
+  background: #fef7e0;
+  font-weight: 600;
+}
+
+.ai-note {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #5f6368;
+}
+
+.section-title {
+  font-size: 15px;
+  margin: 4px 0 -2px;
+}
+
+/* Score bar on each route card: where the "penalty minutes" come from */
+.score {
+  margin-top: 8px;
+}
+
+.score-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f1f3f4;
+}
+
+.score-time    { background: #1a73e8; }
+.score-traffic { background: #d93025; }
+.score-hills   { background: #b06000; }
+.score-lanes   { background: #9334e6; }
+.score-street  { background: #202124; }
+
+.score-words {
+  font-size: 12px;
+  color: #5f6368;
+  margin-top: 3px;
+}
+
+.route-card .why {
+  margin-top: 8px;
+}
+
+.how-scored {
+  font-size: 13px;
+  color: #3c4043;
+}
+
+.how-scored summary {
+  cursor: pointer;
+  color: #1a73e8;
+  font-weight: 600;
+}
+
+.elevation-caption {
+  font-size: 12px;
+  color: #5f6368;
+}
+
 /* ---------- Phones: panel sits at the bottom instead ---------- */
 @media (max-width: 600px) {
   #panel {
     top: auto;
-    bottom: 16px;
+    bottom: 34px;          /* leave room for the map credits line underneath */
     max-height: 55%;
+  }
+}
+
+/* ===== 3D tools (three_d.js) ===== */
+
+/* The column of map buttons: top-right, just under MapLibre's zoom buttons */
+#map-tools {
+  position: absolute;
+  top: 108px;
+  right: 10px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;           /* clicks pass through the empty space around the buttons... */
+}
+
+#map-tools > * {
+  pointer-events: auto;           /* ...but the buttons and the card still get them */
+}
+
+.wf-tool-button {
+  min-height: 40px;
+  min-width: 44px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: white;
+  color: #202124;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+}
+
+.wf-tool-button:hover        { background: #f1f3f4; }
+.wf-tool-button:focus-visible { outline: 3px solid #1a73e8; outline-offset: 2px; }
+
+/* 3D is on: the button turns blue (and offers "2D" to go back) */
+.wf-tool-button[aria-pressed="true"]       { background: #1a73e8; color: white; }
+.wf-tool-button[aria-pressed="true"]:hover { background: #1557b0; }
+
+/* "■ Stop" while the preview plays */
+.wf-tool-button.wf-stop       { background: #d93025; color: white; }
+.wf-tool-button.wf-stop:hover { background: #b3261e; }
+
+.wf-tool-button:disabled,
+.wf-tool-button:disabled:hover {
+  background: white;
+  color: #9aa0a6;
+  cursor: not-allowed;
+}
+
+/* The ride preview card: progress, height, steepness */
+.wf-preview-card {
+  width: 210px;
+  box-sizing: border-box;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  padding: 10px 12px;
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wf-preview-card[hidden] {
+  display: none;
+}
+
+.wf-card-title {
+  font-weight: 700;
+}
+
+.wf-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: #e8eaed;
+  overflow: hidden;
+}
+
+.wf-progress-fill {
+  height: 100%;
+  background: #1a73e8;
+  transform: scaleX(0);
+  transform-origin: left;          /* grows from the left as the ride goes on */
+}
+
+.wf-card-miles {
+  font-size: 13px;
+  color: #5f6368;
+  font-variant-numeric: tabular-nums;  /* digits don't wiggle as they change */
+}
+
+.wf-card-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.wf-card-hint {
+  font-size: 12px;
+  color: #5f6368;
+}
+
+/* Steepness colors: green = easy (under 3%), orange = moderate, red = steep (6%+) */
+.wf-grade-easy     { color: #188038; }
+.wf-grade-moderate { color: #e37400; }
+.wf-grade-steep    { color: #d93025; }
+
+/* The 🚲 that rides along the route during the preview */
+.wf-rider {
+  width: 34px;
+  height: 34px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: white;
+  border: 3px solid #202124;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* The dot on the map that follows your pointer on the elevation chart */
+.wf-hover-dot {
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: #202124;
+  border: 3px solid white;
+  box-shadow: 0 0 0 2px rgba(32, 33, 36, 0.35), 0 1px 4px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+/* The elevation chart can be pointed at (and scrubbed sideways with a finger) */
+.elevation-chart svg {
+  cursor: crosshair;
+  touch-action: pan-y;             /* a sideways finger slide scrubs; up/down still scrolls */
+}
+
+/* "You are here" line on the elevation chart */
+.wf-chart-cursor {
+  stroke: #202124;
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+/* The little label above the chart: "1.2 mi · 245 ft · 6% grade" */
+.wf-chart-tip {
+  position: fixed;
+  z-index: 10;
+  transform: translate(-50%, calc(-100% - 8px));   /* sit just above the chart */
+  background: #202124;
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.wf-chart-tip[hidden] {
+  display: none;
+}
+
+/* Lighter colors so they're readable on the dark label */
+.wf-chart-tip .wf-grade-easy     { color: #81c995; }
+.wf-chart-tip .wf-grade-moderate { color: #fdd663; }
+.wf-chart-tip .wf-grade-steep    { color: #f28b82; }
+
+/* Text only screen readers hear */
+.wf-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Phones: bigger buttons, and the panel slides away during a ride preview */
+@media (max-width: 600px) {
+  .wf-tool-button {
+    min-height: 44px;
+  }
+
+  #panel {
+    transition: transform 0.35s ease, visibility 0s;
+  }
+
+  body.wf-previewing #panel {
+    transform: translateY(calc(100% + 40px));
+    visibility: hidden;                             /* also skipped by Tab while hidden */
+    transition: transform 0.35s ease, visibility 0s 0.35s;
+  }
+
+  /* The card moves to the empty bottom of the screen, out of the rider's view ahead */
+  .wf-preview-card {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: 40px;
+    width: auto;
+  }
+}
+
+/* Touch screens have no Esc key */
+@media (hover: none) {
+  .wf-card-hint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #panel,
+  body.wf-previewing #panel {
+    transition: none;
   }
 }

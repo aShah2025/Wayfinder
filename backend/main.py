@@ -1,3 +1,6 @@
+import asyncio
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Read secrets (like the Gemini API key) from the .env file.
@@ -6,12 +9,12 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.ai_parser import AIUnavailable, RidePreferences
 from backend.geocode import search_places
 from backend.planner import plan_ride
-from backend.routing import RouteError
+from backend.routing import RouteError, RoutingServiceDown
 
 app = FastAPI()
 
@@ -23,8 +26,9 @@ def health():
 
 # Search for places as the user types, e.g. /api/search?q=santana row
 @app.get("/api/search")
-async def search(q: str):
-    return await search_places(q)
+async def search(q: str, lat: float | None = None, lon: float | None = None):
+    near = {"lat": lat, "lon": lon} if lat is not None and lon is not None else None
+    return await search_places(q[:200], near=near)
 
 
 # These classes describe what the website must send us.
@@ -37,7 +41,7 @@ class Point(BaseModel):
 class RouteRequest(BaseModel):
     start: Point
     end: Point
-    instructions: str = ""  # what the rider typed, e.g. "avoid hills"
+    instructions: str = Field("", max_length=500)  # what the rider typed, e.g. "avoid hills"
     # The preferences from the last route, so follow-ups like "ok but shorter" work.
     previous_preferences: RidePreferences | None = None
 
@@ -46,17 +50,34 @@ class RouteRequest(BaseModel):
 @app.post("/api/route")
 async def route(request: RouteRequest):
     try:
-        return await plan_ride(
-            request.start.model_dump(),
-            request.end.model_dump(),
-            request.instructions,
-            request.previous_preferences,
+        # Never make the rider wait forever: give up after 45 seconds.
+        return await asyncio.wait_for(
+            plan_ride(
+                request.start.model_dump(),
+                request.end.model_dump(),
+                request.instructions,
+                request.previous_preferences,
+            ),
+            timeout=45,
         )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="The free map servers are slow right now. "
+                            "Please try again in a moment.")
+    except RoutingServiceDown as error:
+        raise HTTPException(status_code=503, detail=str(error))
     except RouteError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except AIUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error))
+    except Exception as error:
+        # Anything unexpected: log it for us, show a calm message to the rider.
+        print(f"[main] unexpected error planning a ride: {error!r}")
+        raise HTTPException(status_code=500,
+                            detail="Something went wrong planning this ride. Please try again.")
 
 
 # Serve the website. This must stay LAST, because "/" matches every address.
-app.mount("/", StaticFiles(directory="frontend", html=True))
+# (On Vercel, the website files are served separately, so the folder may not be here.)
+FRONTEND = Path(__file__).parent.parent / "frontend"
+if FRONTEND.exists():
+    app.mount("/", StaticFiles(directory=FRONTEND, html=True))

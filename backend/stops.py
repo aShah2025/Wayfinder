@@ -7,10 +7,9 @@ place in the area, then picks the one that adds the smallest detour.
 """
 import math
 
-import httpx
+from backend.web import ServiceUnavailable, request_json
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-HEADERS = {"User-Agent": "Wayfinder (ImpactHack student project)"}
 
 # Each stop type -> the OpenStreetMap tag that marks those places, plus an emoji.
 STOP_TYPES = {
@@ -56,15 +55,16 @@ async def find_stop(start, end, stop_type):
     # in this box, and give me their center points".
     query = (f'[out:json][timeout:15];'
              f'nwr{STOP_TYPES[stop_type]["tag"]}({south},{west},{north},{east});'
-             f'out center 200;')
+             f'out center 3000;')
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.post(OVERPASS_URL, data={"data": query}, headers=HEADERS)
-        response.raise_for_status()
-        elements = response.json()["elements"]
-    except (httpx.HTTPError, ValueError, KeyError):
+        status, data = await request_json("POST", OVERPASS_URL, data={"data": query},
+                                          timeout=20, attempts=2)
+    except ServiceUnavailable:
         return None  # the stop is a bonus, so don't break the whole route if this fails
+    if status != 200:
+        return None
+    elements = data.get("elements", [])
 
     best = None
     for element in elements:
@@ -76,8 +76,8 @@ async def find_stop(start, end, stop_type):
             continue
 
         place = {"lat": point["lat"], "lon": point["lon"]}
-        if distance_km(start, place) < 0.3:
-            continue  # right next to the start isn't really "on the way"
+        if distance_km(start, place) < 0.3 or distance_km(place, end) < 0.3:
+            continue  # right next to the start or the end isn't really "on the way"
         extra = detour_km(start, place, end)
         if best is None or extra < best["detour_km"]:
             best = {
