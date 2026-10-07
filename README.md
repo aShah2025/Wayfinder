@@ -40,7 +40,9 @@ The AI (Google Gemini) does exactly **one** job: turning your words into a stric
 - 🚫 **Avoid any street by name**, with automatic re-routing
 - ⚠️ **Honest "heads up" warnings** when no route can fully do what you asked
 - ☕ **Stops on the way** (coffee, water, restrooms, bike shops...), picked for the smallest detour
-- ⛰️ **Elevation chart** for every route
+- ⚖️ **Shows its math**: a score bar on every route card, plus "why not the fastest?"
+- 🏔️ **3D terrain view + ride preview** fly-through, and an elevation chart linked to the map
+- 🧪 **One-click example rides**
 - 📍 **Use my location**, works on phones
 
 ## Run it yourself
@@ -57,10 +59,21 @@ uvicorn backend.main:app --reload
 
 Open **http://localhost:8000**.
 
+**Optional: run your own routing engine for all of California** (faster, no rate limits, ~6 GB):
+
+```bash
+pip install pyvalhalla
+bash scripts/build_valhalla.sh
+```
+
+Without it, Wayfinder uses the free public Valhalla server.
+
+**Hosting on Vercel:** import the GitHub repo at vercel.com, add `GEMINI_API_KEY` as an Environment Variable, and deploy. `vercel.json` and `api/index.py` are already set up. The hosted version uses the public routing server.
+
 Run the tests:
 
 ```bash
-pytest                      # 24 fast tests of Wayfinder's own logic
+pytest                      # 39 fast tests of Wayfinder's own logic
 python tests/check_ai.py    # 18 checks that the AI maps requests to the right settings
 ```
 
@@ -70,7 +83,8 @@ python tests/check_ai.py    # 18 checks that the AI maps requests to the right s
 |---|---|
 | Backend | Python, FastAPI, httpx, Pydantic |
 | AI | Google Gemini (`gemini-3.5-flash-lite` with automatic fallbacks), structured JSON output |
-| Routing | [Valhalla](https://github.com/valhalla/valhalla) open-source routing engine |
+| Routing | [Valhalla](https://github.com/valhalla/valhalla) open-source routing engine, run locally with `pyvalhalla` + California OSM and elevation data |
+| 3D | MapLibre terrain with [AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/) |
 | Map data | [OpenStreetMap](https://www.openstreetmap.org) |
 | Place search | [Photon](https://photon.komoot.io) (addresses), [Overpass API](https://overpass-api.de) (stops) |
 | Frontend | HTML, CSS, JavaScript, [MapLibre GL JS](https://maplibre.org), [OpenFreeMap](https://openfreemap.org) tiles |

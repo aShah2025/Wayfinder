@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -76,4 +77,7 @@ async def route(request: RouteRequest):
 
 
 # Serve the website. This must stay LAST, because "/" matches every address.
-app.mount("/", StaticFiles(directory="frontend", html=True))
+# (On Vercel, the website files are served separately, so the folder may not be here.)
+FRONTEND = Path(__file__).parent.parent / "frontend"
+if FRONTEND.exists():
+    app.mount("/", StaticFiles(directory=FRONTEND, html=True))

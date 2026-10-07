@@ -699,6 +699,22 @@ input:focus, textarea:focus {
     visibility: hidden;                             /* also skipped by Tab while hidden */
     transition: transform 0.35s ease, visibility 0s 0.35s;
   }
+
+  /* The card moves to the empty bottom of the screen, out of the rider's view ahead */
+  .wf-preview-card {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: 40px;
+    width: auto;
+  }
+}
+
+/* Touch screens have no Esc key */
+@media (hover: none) {
+  .wf-card-hint {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
